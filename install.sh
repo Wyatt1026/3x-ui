@@ -524,8 +524,8 @@ ssl_cert_issue() {
     return 0
 }
 
-# Reusable interactive SSL setup (domain or IP)
-# Sets global `SSL_HOST` to the chosen domain/IP for Access URL usage
+# Reusable interactive panel access setup (SSL or HTTP)
+# Sets globals used to compose the final Access URL.
 prompt_and_setup_ssl() {
     local panel_port="$1"
     local web_base_path="$2"
@@ -533,19 +533,23 @@ prompt_and_setup_ssl() {
 
     local ssl_choice=""
     SSL_SCHEME="https"
+    SSL_HOST="${server_ip}"
+    HTTP_ONLY_MODE="false"
+    PUBLIC_HTTP_MODE="false"
 
     echo -e "${yellow}Choose SSL certificate setup method:${plain}"
     echo -e "${green}1.${plain} Let's Encrypt for Domain (90-day validity, auto-renews)"
     echo -e "${green}2.${plain} Let's Encrypt for IP Address (6-day validity, auto-renews)"
     echo -e "${green}3.${plain} Custom SSL Certificate (Path to existing files)"
-    echo -e "${green}4.${plain} Skip SSL (advanced — behind reverse proxy / SSH tunnel only)"
+    echo -e "${green}4.${plain} HTTP only on 127.0.0.1 (Access via SSH Tunnel)"
+    echo -e "${green}5.${plain} Public IP + HTTP (No SSL)"
     echo -e "${blue}Note:${plain} Options 1 & 2 require port 80 open. Option 3 requires manual paths."
-    echo -e "${blue}Note:${plain} Option 4 serves the panel over plain HTTP — only safe behind nginx/Caddy or an SSH tunnel."
+    echo -e "${blue}Note:${plain} Option 4 binds to localhost only. Option 5 exposes plain HTTP publicly and is not recommended."
     read -rp "Choose an option (default 2 for IP): " ssl_choice
     ssl_choice="${ssl_choice// /}" # Trim whitespace
 
-    # Default to 2 (IP cert) if input is empty or invalid (not 1, 3 or 4)
-    if [[ "$ssl_choice" != "1" && "$ssl_choice" != "3" && "$ssl_choice" != "4" ]]; then
+    # Default to 2 (IP cert) if input is empty or invalid.
+    if [[ "$ssl_choice" != "1" && "$ssl_choice" != "3" && "$ssl_choice" != "4" && "$ssl_choice" != "5" ]]; then
         ssl_choice="2"
     fi
 
@@ -657,39 +661,53 @@ prompt_and_setup_ssl() {
             systemctl restart x-ui > /dev/null 2>&1 || rc-service x-ui restart > /dev/null 2>&1
             ;;
         4)
+            # User chose HTTP-only on 127.0.0.1 (SSH Tunnel mode)
+            echo -e "${green}Configuring HTTP-only mode on 127.0.0.1...${plain}"
+            echo -e "${yellow}The panel will listen on 127.0.0.1 ONLY — not accessible from the internet.${plain}"
+            echo -e "${yellow}You must use SSH tunnel to access the panel from your local machine.${plain}"
+
+            ${xui_folder}/x-ui setting -listenIP "127.0.0.1" > /dev/null 2>&1
+            ${xui_folder}/x-ui cert -webCert "" -webCertKey "" > /dev/null 2>&1
+
+            SSL_SCHEME="http"
+            SSL_HOST="127.0.0.1"
+            HTTP_ONLY_MODE="true"
+
+            echo -e "${green}✓ Panel configured to listen on 127.0.0.1 (HTTP only)${plain}"
             echo ""
-            echo -e "${red}⚠ Panel will be installed WITHOUT SSL/TLS.${plain}"
-            echo -e "${yellow}Login credentials and cookies will travel as plain HTTP.${plain}"
-            echo -e "${yellow}Only safe when:${plain}"
-            echo -e "${yellow}  • A reverse proxy (nginx, Caddy, Traefik) terminates TLS for you, or${plain}"
-            echo -e "${yellow}  • You access the panel exclusively via SSH tunnel${plain}"
+            echo -e "${green}═══════════════════════════════════════════════════════════════${plain}"
+            echo -e "${green}  SSH Tunnel Usage                                             ${plain}"
+            echo -e "${green}═══════════════════════════════════════════════════════════════${plain}"
+            echo -e "${yellow}  Run this command on your LOCAL machine to create a tunnel:${plain}"
             echo ""
+            echo -e "  ${blue}ssh -L ${panel_port}:127.0.0.1:${panel_port} root@${server_ip}${plain}"
+            echo ""
+            echo -e "${yellow}  Then open in your browser:${plain}"
+            echo -e "  ${blue}http://127.0.0.1:${panel_port}/${web_base_path}${plain}"
+            echo ""
+            echo -e "${yellow}  To run the tunnel in background:${plain}"
+            echo -e "  ${blue}ssh -f -N -L ${panel_port}:127.0.0.1:${panel_port} root@${server_ip}${plain}"
+            echo -e "${green}═══════════════════════════════════════════════════════════════${plain}"
+
+            systemctl restart x-ui > /dev/null 2>&1 || rc-service x-ui restart > /dev/null 2>&1
+            ;;
+        5)
+            # User chose public IP + HTTP (no SSL)
+            echo -e "${green}Configuring public IP + HTTP mode...${plain}"
+            echo -e "${yellow}The panel will listen on 0.0.0.0 and be accessible from the internet without SSL.${plain}"
+            echo -e "${yellow}This mode is insecure. Use it only if you understand the risk and preferably behind a firewall.${plain}"
+
+            ${xui_folder}/x-ui setting -listenIP "0.0.0.0" > /dev/null 2>&1
+            ${xui_folder}/x-ui cert -webCert "" -webCertKey "" > /dev/null 2>&1
 
             SSL_SCHEME="http"
             SSL_HOST="${server_ip}"
+            PUBLIC_HTTP_MODE="true"
 
-            local bind_local=""
-            read -rp "Bind the panel to 127.0.0.1 only? (recommended — forces SSH tunnel / reverse-proxy access) [y/N]: " bind_local
-            if [[ "$bind_local" == "y" || "$bind_local" == "Y" ]]; then
-                ${xui_folder}/x-ui setting -listenIP "127.0.0.1" > /dev/null 2>&1
-                SSL_HOST="127.0.0.1"
-                echo -e "${green}✓ Panel bound to 127.0.0.1 only. It is now unreachable from the public internet.${plain}"
-                echo ""
-                echo -e "${green}SSH Port Forwarding — open the panel from your local machine via:${plain}"
-                echo -e "  Standard SSH command:"
-                echo -e "  ${yellow}ssh -L 2222:127.0.0.1:${panel_port} root@${server_ip}${plain}"
-                echo -e "  If using an SSH key:"
-                echo -e "  ${yellow}ssh -i <sshkeypath> -L 2222:127.0.0.1:${panel_port} root@${server_ip}${plain}"
-                echo -e "  Then open in your browser:"
-                echo -e "  ${yellow}http://localhost:2222/${web_base_path}${plain}"
-                echo ""
-                echo -e "${yellow}Alternative: point a reverse proxy (nginx/Caddy) at 127.0.0.1:${panel_port} and let it terminate TLS.${plain}"
-            else
-                echo -e "${yellow}Panel will listen on all interfaces over plain HTTP. Make sure something else is terminating TLS in front of it.${plain}"
-            fi
+            echo -e "${green}✓ Panel configured for public HTTP access${plain}"
+            echo -e "${yellow}Public URL: http://${server_ip}:${panel_port}/${web_base_path}${plain}"
 
             systemctl restart x-ui > /dev/null 2>&1 || rc-service x-ui restart > /dev/null 2>&1
-            echo -e "${green}✓ SSL setup skipped.${plain}"
             ;;
         *)
             echo -e "${red}Invalid option. Skipping SSL setup.${plain}"
@@ -775,7 +793,11 @@ config_after_install() {
             echo -e "${green}Access URL:  ${SSL_SCHEME}://${SSL_HOST}:${config_port}/${config_webBasePath}${plain}"
             echo -e "${green}═══════════════════════════════════════════${plain}"
             echo -e "${yellow}⚠ IMPORTANT: Save these credentials securely!${plain}"
-            if [[ "$SSL_SCHEME" == "https" ]]; then
+            if [[ "${HTTP_ONLY_MODE}" == "true" ]]; then
+                echo -e "${yellow}⚠ Mode: HTTP only on 127.0.0.1 (use SSH tunnel)${plain}"
+            elif [[ "${PUBLIC_HTTP_MODE}" == "true" ]]; then
+                echo -e "${yellow}⚠ Mode: Public HTTP without SSL. Consider enabling HTTPS later.${plain}"
+            elif [[ "${SSL_SCHEME}" == "https" ]]; then
                 echo -e "${yellow}⚠ SSL Certificate: Enabled and configured${plain}"
             else
                 echo -e "${yellow}⚠ SSL Certificate: Skipped — panel is HTTP-only. Use a reverse proxy or SSH tunnel.${plain}"
