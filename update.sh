@@ -531,23 +531,27 @@ ssl_cert_issue() {
 }
 # Unified interactive SSL setup (domain or IP)
 # Sets global `SSL_HOST` to the chosen domain/IP
+# Sets global `HTTP_ONLY_MODE` to "true" if user chose HTTP-only (option 4)
 prompt_and_setup_ssl() {
     local panel_port="$1"
     local web_base_path="$2"   # expected without leading slash
     local server_ip="$3"
 
     local ssl_choice=""
+    HTTP_ONLY_MODE="false"
 
     echo -e "${yellow}Choose SSL certificate setup method:${plain}"
     echo -e "${green}1.${plain} Let's Encrypt for Domain (90-day validity, auto-renews)"
     echo -e "${green}2.${plain} Let's Encrypt for IP Address (6-day validity, auto-renews)"
     echo -e "${green}3.${plain} Custom SSL Certificate (Path to existing files)"
+    echo -e "${green}4.${plain} HTTP only on 127.0.0.1 (Access via SSH Tunnel)"
     echo -e "${blue}Note:${plain} Options 1 & 2 require port 80 open. Option 3 requires manual paths."
+    echo -e "${blue}Note:${plain} Option 4 uses plain HTTP bound to localhost only — use SSH tunnel to access."
     read -rp "Choose an option (default 2 for IP): " ssl_choice
     ssl_choice="${ssl_choice// /}"  # Trim whitespace
     
-    # Default to 2 (IP cert) if input is empty or invalid (not 1 or 3)
-    if [[ "$ssl_choice" != "1" && "$ssl_choice" != "3" ]]; then
+    # Default to 2 (IP cert) if input is empty or invalid (not 1, 3, or 4)
+    if [[ "$ssl_choice" != "1" && "$ssl_choice" != "3" && "$ssl_choice" != "4" ]]; then
         ssl_choice="2"
     fi
 
@@ -659,6 +663,39 @@ prompt_and_setup_ssl() {
 
         systemctl restart x-ui >/dev/null 2>&1 || rc-service x-ui restart >/dev/null 2>&1
         ;;
+    4)
+        # User chose HTTP-only on 127.0.0.1 (SSH Tunnel mode)
+        echo -e "${green}Configuring HTTP-only mode on 127.0.0.1...${plain}"
+        echo -e "${yellow}The panel will listen on 127.0.0.1 ONLY — not accessible from the internet.${plain}"
+        echo -e "${yellow}You must use SSH tunnel to access the panel from your local machine.${plain}"
+        
+        # Set listen address to 127.0.0.1 via x-ui binary
+        ${xui_folder}/x-ui setting -listenIP "127.0.0.1" >/dev/null 2>&1
+        
+        # Clear any existing SSL certificate settings (HTTP-only mode)
+        ${xui_folder}/x-ui cert -webCert "" -webCertKey "" >/dev/null 2>&1
+        
+        SSL_HOST="127.0.0.1"
+        HTTP_ONLY_MODE="true"
+        
+        echo -e "${green}✓ Panel configured to listen on 127.0.0.1 (HTTP only)${plain}"
+        echo ""
+        echo -e "${green}═══════════════════════════════════════════════════════════════${plain}"
+        echo -e "${green}  SSH Tunnel Usage                                             ${plain}"
+        echo -e "${green}═══════════════════════════════════════════════════════════════${plain}"
+        echo -e "${yellow}  Run this command on your LOCAL machine to create a tunnel:${plain}"
+        echo ""
+        echo -e "  ${blue}ssh -L ${panel_port}:127.0.0.1:${panel_port} root@${server_ip}${plain}"
+        echo ""
+        echo -e "${yellow}  Then open in your browser:${plain}"
+        echo -e "  ${blue}http://127.0.0.1:${panel_port}/${web_base_path}${plain}"
+        echo ""
+        echo -e "${yellow}  To run the tunnel in background:${plain}"
+        echo -e "  ${blue}ssh -f -N -L ${panel_port}:127.0.0.1:${panel_port} root@${server_ip}${plain}"
+        echo -e "${green}═══════════════════════════════════════════════════════════════${plain}"
+        
+        systemctl restart x-ui >/dev/null 2>&1 || rc-service x-ui restart >/dev/null 2>&1
+        ;;
     *)
         echo -e "${red}Invalid option. Skipping SSL setup.${plain}"
         SSL_HOST="${server_ip}"
@@ -728,9 +765,16 @@ config_after_update() {
         echo -e "${green}═══════════════════════════════════════════${plain}"
         echo -e "${green}     Panel Access Information              ${plain}"
         echo -e "${green}═══════════════════════════════════════════${plain}"
-        echo -e "${green}Access URL: https://${SSL_HOST}:${existing_port}/${existing_webBasePath}${plain}"
         echo -e "${green}═══════════════════════════════════════════${plain}"
-        echo -e "${yellow}⚠ SSL Certificate: Enabled and configured${plain}"
+        if [[ "${HTTP_ONLY_MODE}" == "true" ]]; then
+            echo -e "${green}Access URL: http://127.0.0.1:${existing_port}/${existing_webBasePath}${plain}"
+            echo -e "${green}═══════════════════════════════════════════${plain}"
+            echo -e "${yellow}⚠ Mode: HTTP only on 127.0.0.1 (use SSH tunnel)${plain}"
+        else
+            echo -e "${green}Access URL: https://${SSL_HOST}:${existing_port}/${existing_webBasePath}${plain}"
+            echo -e "${green}═══════════════════════════════════════════${plain}"
+            echo -e "${yellow}⚠ SSL Certificate: Enabled and configured${plain}"
+        fi
     else
         echo -e "${green}SSL certificate is already configured${plain}"
         # Show access URL with existing certificate
