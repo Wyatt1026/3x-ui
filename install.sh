@@ -509,9 +509,11 @@ ssl_cert_issue() {
     return 0
 }
 
-# Reusable interactive SSL setup (domain or IP)
+# Reusable interactive panel access setup (SSL or HTTP)
 # Sets global `SSL_HOST` to the chosen domain/IP for Access URL usage
-# Sets global `HTTP_ONLY_MODE` to "true" if user chose HTTP-only (option 4)
+# Sets global `HTTP_ONLY_MODE` to "true" if user chose localhost HTTP-only (option 4)
+# Sets global `PUBLIC_HTTP_MODE` to "true" if user chose public IP + HTTP (option 5)
+# Sets global `PANEL_PROTOCOL` to "http" or "https" for Access URL usage
 prompt_and_setup_ssl() {
     local panel_port="$1"
     local web_base_path="$2"   # expected without leading slash
@@ -519,19 +521,22 @@ prompt_and_setup_ssl() {
 
     local ssl_choice=""
     HTTP_ONLY_MODE="false"
+    PUBLIC_HTTP_MODE="false"
+    PANEL_PROTOCOL="https"
 
-    echo -e "${yellow}Choose SSL certificate setup method:${plain}"
+    echo -e "${yellow}Choose panel access method:${plain}"
     echo -e "${green}1.${plain} Let's Encrypt for Domain (90-day validity, auto-renews)"
     echo -e "${green}2.${plain} Let's Encrypt for IP Address (6-day validity, auto-renews)"
     echo -e "${green}3.${plain} Custom SSL Certificate (Path to existing files)"
     echo -e "${green}4.${plain} HTTP only on 127.0.0.1 (Access via SSH Tunnel)"
+    echo -e "${green}5.${plain} Public IP + HTTP (No SSL)"
     echo -e "${blue}Note:${plain} Options 1 & 2 require port 80 open. Option 3 requires manual paths."
-    echo -e "${blue}Note:${plain} Option 4 uses plain HTTP bound to localhost only — use SSH tunnel to access."
+    echo -e "${blue}Note:${plain} Option 4 uses plain HTTP bound to localhost only. Option 5 exposes plain HTTP publicly and is not recommended."
     read -rp "Choose an option (default 2 for IP): " ssl_choice
     ssl_choice="${ssl_choice// /}"  # Trim whitespace
     
-    # Default to 2 (IP cert) if input is empty or invalid (not 1, 3, or 4)
-    if [[ "$ssl_choice" != "1" && "$ssl_choice" != "3" && "$ssl_choice" != "4" ]]; then
+    # Default to 2 (IP cert) if input is empty or invalid
+    if [[ "$ssl_choice" != "1" && "$ssl_choice" != "2" && "$ssl_choice" != "3" && "$ssl_choice" != "4" && "$ssl_choice" != "5" ]]; then
         ssl_choice="2"
     fi
 
@@ -649,6 +654,7 @@ prompt_and_setup_ssl() {
         
         SSL_HOST="127.0.0.1"
         HTTP_ONLY_MODE="true"
+        PANEL_PROTOCOL="http"
         
         echo -e "${green}✓ Panel configured to listen on 127.0.0.1 (HTTP only)${plain}"
         echo ""
@@ -666,6 +672,24 @@ prompt_and_setup_ssl() {
         echo -e "  ${blue}ssh -f -N -L ${panel_port}:127.0.0.1:${panel_port} root@${server_ip}${plain}"
         echo -e "${green}═══════════════════════════════════════════════════════════════${plain}"
         
+        systemctl restart x-ui >/dev/null 2>&1 || rc-service x-ui restart >/dev/null 2>&1
+        ;;
+    5)
+        # User chose public IP + HTTP (no SSL)
+        echo -e "${green}Configuring public IP + HTTP mode...${plain}"
+        echo -e "${yellow}The panel will listen on 0.0.0.0 and be accessible from the internet without SSL.${plain}"
+        echo -e "${yellow}This mode is insecure. Use it only if you understand the risk and preferably behind a firewall.${plain}"
+
+        ${xui_folder}/x-ui setting -listenIP "0.0.0.0" >/dev/null 2>&1
+        ${xui_folder}/x-ui cert -webCert "" -webCertKey "" >/dev/null 2>&1
+
+        SSL_HOST="${server_ip}"
+        PUBLIC_HTTP_MODE="true"
+        PANEL_PROTOCOL="http"
+
+        echo -e "${green}✓ Panel configured for public HTTP access${plain}"
+        echo -e "${yellow}Public URL: http://${server_ip}:${panel_port}/${web_base_path}${plain}"
+
         systemctl restart x-ui >/dev/null 2>&1 || rc-service x-ui restart >/dev/null 2>&1
         ;;
     *)
@@ -719,10 +743,10 @@ config_after_install() {
             
             echo ""
             echo -e "${green}═══════════════════════════════════════════${plain}"
-            echo -e "${green}     SSL Certificate Setup (MANDATORY)     ${plain}"
+            echo -e "${green}       Panel Access Setup (PREFERRED)      ${plain}"
             echo -e "${green}═══════════════════════════════════════════${plain}"
-            echo -e "${yellow}For security, SSL certificate is required for all panels.${plain}"
-            echo -e "${yellow}Let's Encrypt now supports both domains and IP addresses!${plain}"
+            echo -e "${yellow}HTTPS is recommended. You can also choose localhost HTTP or public HTTP.${plain}"
+            echo -e "${yellow}Let's Encrypt supports both domains and IP addresses.${plain}"
             echo ""
 
             prompt_and_setup_ssl "${config_port}" "${config_webBasePath}" "${server_ip}"
@@ -736,15 +760,14 @@ config_after_install() {
             echo -e "${green}Password:    ${config_password}${plain}"
             echo -e "${green}Port:        ${config_port}${plain}"
             echo -e "${green}WebBasePath: ${config_webBasePath}${plain}"
+            echo -e "${green}Access URL:  ${PANEL_PROTOCOL}://${SSL_HOST}:${config_port}/${config_webBasePath}${plain}"
+            echo -e "${green}═══════════════════════════════════════════${plain}"
+            echo -e "${yellow}⚠ IMPORTANT: Save these credentials securely!${plain}"
             if [[ "${HTTP_ONLY_MODE}" == "true" ]]; then
-                echo -e "${green}Access URL:  http://127.0.0.1:${config_port}/${config_webBasePath}${plain}"
-                echo -e "${green}═══════════════════════════════════════════${plain}"
-                echo -e "${yellow}⚠ IMPORTANT: Save these credentials securely!${plain}"
                 echo -e "${yellow}⚠ Mode: HTTP only on 127.0.0.1 (use SSH tunnel)${plain}"
+            elif [[ "${PUBLIC_HTTP_MODE}" == "true" ]]; then
+                echo -e "${yellow}⚠ Mode: Public HTTP without SSL. Consider enabling HTTPS later.${plain}"
             else
-                echo -e "${green}Access URL:  https://${SSL_HOST}:${config_port}/${config_webBasePath}${plain}"
-                echo -e "${green}═══════════════════════════════════════════${plain}"
-                echo -e "${yellow}⚠ IMPORTANT: Save these credentials securely!${plain}"
                 echo -e "${yellow}⚠ SSL Certificate: Enabled and configured${plain}"
             fi
         else
@@ -757,16 +780,12 @@ config_after_install() {
             if [[ -z "${existing_cert}" ]]; then
                 echo ""
                 echo -e "${green}═══════════════════════════════════════════${plain}"
-                echo -e "${green}     SSL Certificate Setup (RECOMMENDED)   ${plain}"
+                echo -e "${green}       Panel Access Setup (RECOMMENDED)    ${plain}"
                 echo -e "${green}═══════════════════════════════════════════${plain}"
-                echo -e "${yellow}Let's Encrypt now supports both domains and IP addresses!${plain}"
+                echo -e "${yellow}HTTPS is recommended. Public HTTP is available but insecure.${plain}"
                 echo ""
                 prompt_and_setup_ssl "${existing_port}" "${config_webBasePath}" "${server_ip}"
-                if [[ "${HTTP_ONLY_MODE}" == "true" ]]; then
-                    echo -e "${green}Access URL:  http://127.0.0.1:${existing_port}/${config_webBasePath}${plain}"
-                else
-                    echo -e "${green}Access URL:  https://${SSL_HOST}:${existing_port}/${config_webBasePath}${plain}"
-                fi
+                echo -e "${green}Access URL:  ${PANEL_PROTOCOL}://${SSL_HOST}:${existing_port}/${config_webBasePath}${plain}"
             else
                 # If a cert already exists, just show the access URL
                 echo -e "${green}Access URL: https://${server_ip}:${existing_port}/${config_webBasePath}${plain}"
@@ -794,16 +813,12 @@ config_after_install() {
         if [[ -z "$existing_cert" ]]; then
             echo ""
             echo -e "${green}═══════════════════════════════════════════${plain}"
-            echo -e "${green}     SSL Certificate Setup (RECOMMENDED)   ${plain}"
+            echo -e "${green}       Panel Access Setup (RECOMMENDED)    ${plain}"
             echo -e "${green}═══════════════════════════════════════════${plain}"
-            echo -e "${yellow}Let's Encrypt now supports both domains and IP addresses!${plain}"
+            echo -e "${yellow}HTTPS is recommended. Public HTTP is available but insecure.${plain}"
             echo ""
             prompt_and_setup_ssl "${existing_port}" "${existing_webBasePath}" "${server_ip}"
-            if [[ "${HTTP_ONLY_MODE}" == "true" ]]; then
-                echo -e "${green}Access URL:  http://127.0.0.1:${existing_port}/${existing_webBasePath}${plain}"
-            else
-                echo -e "${green}Access URL:  https://${SSL_HOST}:${existing_port}/${existing_webBasePath}${plain}"
-            fi
+            echo -e "${green}Access URL:  ${PANEL_PROTOCOL}://${SSL_HOST}:${existing_port}/${existing_webBasePath}${plain}"
         else
             echo -e "${green}SSL certificate already configured. No action needed.${plain}"
         fi
