@@ -149,11 +149,93 @@ install_acme() {
     return 0
 }
 
+acme_ca_name() {
+    case "$1" in
+    zerossl)
+        echo "ZeroSSL"
+        ;;
+    *)
+        echo "Let's Encrypt"
+        ;;
+    esac
+}
+
+prompt_acme_ca() {
+    local choice=""
+    ACME_CA="letsencrypt"
+    ACME_CA_NAME="$(acme_ca_name "${ACME_CA}")"
+
+    echo -e "${yellow}Choose certificate authority:${plain}"
+    echo -e "${green}1.${plain} Let's Encrypt"
+    echo -e "${green}2.${plain} ZeroSSL"
+    read -rp "Choose CA (default 1): " choice
+    choice="${choice// /}"
+
+    case "${choice}" in
+    2 | zerossl | ZeroSSL | ZEROSSL)
+        ACME_CA="zerossl"
+        ;;
+    esac
+    ACME_CA_NAME="$(acme_ca_name "${ACME_CA}")"
+    echo -e "${green}Selected CA: ${ACME_CA_NAME}${plain}"
+}
+
+ensure_acme_ca_account() {
+    local acme_ca="${1:-letsencrypt}"
+    local acme_ca_display="$(acme_ca_name "${acme_ca}")"
+
+    ~/.acme.sh/acme.sh --set-default-ca --server "${acme_ca}" --force
+    if [ $? -ne 0 ]; then
+        echo -e "${red}Failed to set default CA to ${acme_ca_display}.${plain}"
+        return 1
+    fi
+
+    if [[ "${acme_ca}" == "zerossl" ]]; then
+        local account_email=""
+        while true; do
+            read -rp "Please enter your email for ZeroSSL account registration: " account_email
+            account_email="${account_email// /}"
+            if [[ "${account_email}" =~ ^[^@[:space:]]+@[^@[:space:]]+\.[^@[:space:]]+$ ]]; then
+                break
+            fi
+            echo -e "${red}Invalid email format. Please try again.${plain}"
+        done
+
+        ~/.acme.sh/acme.sh --register-account -m "${account_email}" --server "${acme_ca}"
+        if [ $? -ne 0 ]; then
+            echo -e "${red}ZeroSSL account registration with email failed.${plain}"
+            echo -e "${yellow}If you have ZeroSSL EAB credentials, you can use them now.${plain}"
+            local eab_kid=""
+            local eab_hmac_key=""
+            read -rp "Enter ZeroSSL EAB KID (leave empty to abort): " eab_kid
+            if [[ -z "${eab_kid}" ]]; then
+                return 1
+            fi
+            read -rsp "Enter ZeroSSL EAB HMAC key: " eab_hmac_key
+            echo
+            if [[ -z "${eab_hmac_key}" ]]; then
+                echo -e "${red}ZeroSSL EAB HMAC key cannot be empty.${plain}"
+                return 1
+            fi
+
+            ~/.acme.sh/acme.sh --register-account --server "${acme_ca}" --eab-kid "${eab_kid}" --eab-hmac-key "${eab_hmac_key}"
+            if [ $? -ne 0 ]; then
+                echo -e "${red}ZeroSSL account registration with EAB credentials failed.${plain}"
+                return 1
+            fi
+        fi
+    fi
+
+    return 0
+}
+
 setup_ssl_certificate() {
     local domain="$1"
     local server_ip="$2"
     local existing_port="$3"
     local existing_webBasePath="$4"
+    local acme_ca="${5:-letsencrypt}"
+    local acme_ca_display="$(acme_ca_name "${acme_ca}")"
     
     echo -e "${green}Setting up SSL certificate...${plain}"
     
@@ -165,17 +247,21 @@ setup_ssl_certificate() {
             return 1
         fi
     fi
+
+    ensure_acme_ca_account "${acme_ca}"
+    if [ $? -ne 0 ]; then
+        return 1
+    fi
     
     # Create certificate directory
     local certPath="/root/cert/${domain}"
     mkdir -p "$certPath"
     
     # Issue certificate
-    echo -e "${green}Issuing SSL certificate for ${domain}...${plain}"
+    echo -e "${green}Issuing ${acme_ca_display} SSL certificate for ${domain}...${plain}"
     echo -e "${yellow}Note: Port 80 must be open and accessible from the internet${plain}"
     
-    ~/.acme.sh/acme.sh --set-default-ca --server letsencrypt --force >/dev/null 2>&1
-    ~/.acme.sh/acme.sh --issue -d ${domain} --listen-v6 --standalone --httpport 80 --force
+    ~/.acme.sh/acme.sh --issue -d ${domain} --listen-v6 --standalone --httpport 80 --server "${acme_ca}" --force
     
     if [ $? -ne 0 ]; then
         echo -e "${yellow}Failed to issue certificate for ${domain}${plain}"
@@ -215,14 +301,20 @@ setup_ssl_certificate() {
     fi
 }
 
-# Issue Let's Encrypt IP certificate with shortlived profile (~6 days validity)
+# Issue an IP certificate with the selected ACME CA
 # Requires acme.sh and port 80 open for HTTP-01 challenge
 setup_ip_certificate() {
     local ipv4="$1"
     local ipv6="$2"  # optional
+    local acme_ca="${3:-letsencrypt}"
+    local acme_ca_display="$(acme_ca_name "${acme_ca}")"
 
-    echo -e "${green}Setting up Let's Encrypt IP certificate (shortlived profile)...${plain}"
-    echo -e "${yellow}Note: IP certificates are valid for ~6 days and will auto-renew.${plain}"
+    echo -e "${green}Setting up ${acme_ca_display} IP certificate...${plain}"
+    if [[ "${acme_ca}" == "letsencrypt" ]]; then
+        echo -e "${yellow}Note: Let's Encrypt IP certificates use the shortlived profile (~6 days) and will auto-renew.${plain}"
+    else
+        echo -e "${yellow}Note: ZeroSSL IP certificates use HTTP validation and will auto-renew.${plain}"
+    fi
     echo -e "${yellow}Default listener is port 80. If you choose another port, ensure external port 80 forwards to it.${plain}"
 
     # Check for acme.sh
@@ -232,6 +324,11 @@ setup_ip_certificate() {
             echo -e "${red}Failed to install acme.sh${plain}"
             return 1
         fi
+    fi
+
+    ensure_acme_ca_account "${acme_ca}"
+    if [ $? -ne 0 ]; then
+        return 1
     fi
 
     # Validate IP address
@@ -250,9 +347,9 @@ setup_ip_certificate() {
     mkdir -p "$certDir"
 
     # Build domain arguments
-    local domain_args="-d ${ipv4}"
+    local domain_args=("-d" "${ipv4}")
     if [[ -n "$ipv6" ]] && is_ipv6 "$ipv6"; then
-        domain_args="${domain_args} -d ${ipv6}"
+        domain_args+=("-d" "${ipv6}")
         echo -e "${green}Including IPv6 address: ${ipv6}${plain}"
     fi
 
@@ -269,7 +366,7 @@ setup_ip_certificate() {
     fi
     echo -e "${green}Using port ${WebPort} for standalone validation.${plain}"
     if [[ "${WebPort}" -ne 80 ]]; then
-        echo -e "${yellow}Reminder: Let's Encrypt still connects on port 80; forward external port 80 to ${WebPort}.${plain}"
+        echo -e "${yellow}Reminder: the ACME CA still connects on port 80; forward external port 80 to ${WebPort}.${plain}"
     fi
 
     # Ensure chosen port is available
@@ -296,18 +393,15 @@ setup_ip_certificate() {
         fi
     done
 
-    # Issue certificate with shortlived profile
-    echo -e "${green}Issuing IP certificate for ${ipv4}...${plain}"
-    ~/.acme.sh/acme.sh --set-default-ca --server letsencrypt --force >/dev/null 2>&1
-    
-    ~/.acme.sh/acme.sh --issue \
-        ${domain_args} \
-        --standalone \
-        --server letsencrypt \
-        --certificate-profile shortlived \
-        --days 6 \
-        --httpport ${WebPort} \
-        --force
+    # Issue certificate
+    echo -e "${green}Issuing ${acme_ca_display} IP certificate for ${ipv4}...${plain}"
+    local issue_args=(--issue "${domain_args[@]}" --standalone --server "${acme_ca}" --httpport "${WebPort}" --force)
+    local cert_validity="90 days"
+    if [[ "${acme_ca}" == "letsencrypt" ]]; then
+        issue_args+=(--certificate-profile shortlived --days 6)
+        cert_validity="~6 days"
+    fi
+    ~/.acme.sh/acme.sh "${issue_args[@]}"
 
     if [ $? -ne 0 ]; then
         echo -e "${red}Failed to issue IP certificate${plain}"
@@ -360,7 +454,8 @@ setup_ip_certificate() {
     fi
 
     echo -e "${green}IP certificate installed and configured successfully!${plain}"
-    echo -e "${green}Certificate valid for ~6 days, auto-renews via acme.sh cron job.${plain}"
+    echo -e "${green}Certificate issuer: ${acme_ca_display}${plain}"
+    echo -e "${green}Certificate valid for ${cert_validity}, auto-renews via acme.sh cron job.${plain}"
     echo -e "${yellow}Panel will automatically restart after each renewal.${plain}"
     return 0
 }
@@ -381,6 +476,12 @@ ssl_cert_issue() {
         else
             echo -e "${green}acme.sh installed successfully${plain}"
         fi
+    fi
+
+    prompt_acme_ca
+    ensure_acme_ca_account "${ACME_CA}"
+    if [ $? -ne 0 ]; then
+        return 1
     fi
 
     # get the domain here, and we need to verify it
@@ -406,23 +507,24 @@ ssl_cert_issue() {
 
     # detect existing certificate and reuse it if present
     local cert_exists=0
+    local reissue_existing=0
     if ~/.acme.sh/acme.sh --list 2>/dev/null | awk '{print $1}' | grep -Fxq "${domain}"; then
         cert_exists=1
         local certInfo=$(~/.acme.sh/acme.sh --list 2>/dev/null | grep -F "${domain}")
         echo -e "${yellow}Existing certificate found for ${domain}, will reuse it.${plain}"
         [[ -n "${certInfo}" ]] && echo "$certInfo"
+        read -rp "Issue a new certificate from ${ACME_CA_NAME} instead of reusing it? (y/n): " reissueCert
+        if [[ "${reissueCert}" == "y" || "${reissueCert}" == "Y" ]]; then
+            cert_exists=0
+            reissue_existing=1
+        fi
     else
-        echo -e "${green}Your domain is ready for issuing certificates now...${plain}"
+        echo -e "${green}Your domain is ready for issuing certificates from ${ACME_CA_NAME} now...${plain}"
     fi
 
     # create a directory for the certificate
     certPath="/root/cert/${domain}"
-    if [ ! -d "$certPath" ]; then
-        mkdir -p "$certPath"
-    else
-        rm -rf "$certPath"
-        mkdir -p "$certPath"
-    fi
+    mkdir -p "$certPath"
 
     # get the port number for the standalone server
     local WebPort=80
@@ -439,15 +541,16 @@ ssl_cert_issue() {
 
     if [[ ${cert_exists} -eq 0 ]]; then
         # issue the certificate
-        ~/.acme.sh/acme.sh --set-default-ca --server letsencrypt --force
-        ~/.acme.sh/acme.sh --issue -d ${domain} --listen-v6 --standalone --httpport ${WebPort} --force
+        ~/.acme.sh/acme.sh --issue -d ${domain} --listen-v6 --standalone --httpport ${WebPort} --server "${ACME_CA}" --force
         if [ $? -ne 0 ]; then
             echo -e "${red}Issuing certificate failed, please check logs.${plain}"
-            rm -rf ~/.acme.sh/${domain}
+            if [[ ${reissue_existing} -eq 0 ]]; then
+                rm -rf ~/.acme.sh/${domain}
+            fi
             systemctl start x-ui 2>/dev/null || rc-service x-ui start 2>/dev/null
             return 1
         else
-            echo -e "${green}Issuing certificate succeeded, installing certificates...${plain}"
+            echo -e "${green}${ACME_CA_NAME} certificate issued successfully, installing certificates...${plain}"
         fi
     else
         echo -e "${green}Using existing certificate, installing certificates...${plain}"
@@ -496,7 +599,7 @@ ssl_cert_issue() {
         echo -e "${green}Installing certificate succeeded, enabling auto renew...${plain}"
     else
         echo -e "${red}Installing certificate failed, exiting.${plain}"
-        if [[ ${cert_exists} -eq 0 ]]; then
+        if [[ ${cert_exists} -eq 0 && ${reissue_existing} -eq 0 ]]; then
             rm -rf ~/.acme.sh/${domain}
         fi
         systemctl start x-ui 2>/dev/null || rc-service x-ui start 2>/dev/null
@@ -556,8 +659,8 @@ prompt_and_setup_ssl() {
     HTTP_ONLY_MODE="false"
 
     echo -e "${yellow}Choose SSL certificate setup method:${plain}"
-    echo -e "${green}1.${plain} Let's Encrypt for Domain (90-day validity, auto-renews)"
-    echo -e "${green}2.${plain} Let's Encrypt for IP Address (6-day validity, auto-renews)"
+    echo -e "${green}1.${plain} ACME Certificate for Domain (choose CA, auto-renews)"
+    echo -e "${green}2.${plain} ACME Certificate for IP Address (choose CA, auto-renews)"
     echo -e "${green}3.${plain} Custom SSL Certificate (Path to existing files)"
     echo -e "${green}4.${plain} HTTP only on 127.0.0.1 (Access via SSH Tunnel)"
     echo -e "${blue}Note:${plain} Options 1 & 2 require port 80 open. Option 3 requires manual paths."
@@ -572,8 +675,8 @@ prompt_and_setup_ssl() {
 
     case "$ssl_choice" in
     1)
-        # User chose Let's Encrypt domain option
-        echo -e "${green}Using Let's Encrypt for domain certificate...${plain}"
+        # User chose ACME domain option
+        echo -e "${green}Using ACME for domain certificate...${plain}"
         if ssl_cert_issue; then
             local cert_domain="${SSL_ISSUED_DOMAIN}"
             if [[ -z "${cert_domain}" ]]; then
@@ -593,8 +696,9 @@ prompt_and_setup_ssl() {
         fi
         ;;
     2)
-        # User chose Let's Encrypt IP certificate option
-        echo -e "${green}Using Let's Encrypt for IP certificate (shortlived profile)...${plain}"
+        # User chose ACME IP certificate option
+        echo -e "${green}Using ACME for IP certificate...${plain}"
+        prompt_acme_ca
         
         # Ask for optional IPv6
         local ipv6_addr=""
@@ -608,10 +712,10 @@ prompt_and_setup_ssl() {
             systemctl stop x-ui >/dev/null 2>&1
         fi
         
-        setup_ip_certificate "${server_ip}" "${ipv6_addr}"
+        setup_ip_certificate "${server_ip}" "${ipv6_addr}" "${ACME_CA}"
         if [ $? -eq 0 ]; then
             SSL_HOST="${server_ip}"
-            echo -e "${green}✓ Let's Encrypt IP certificate configured successfully${plain}"
+            echo -e "${green}✓ ${ACME_CA_NAME} IP certificate configured successfully${plain}"
         else
             echo -e "${red}✗ IP certificate setup failed. Please check port 80 is open.${plain}"
             SSL_HOST="${server_ip}"
@@ -771,7 +875,7 @@ config_after_update() {
         echo -e "${red}      ⚠ NO SSL CERTIFICATE DETECTED ⚠     ${plain}"
         echo -e "${red}═══════════════════════════════════════════${plain}"
         echo -e "${yellow}For security, SSL certificate is MANDATORY for all panels.${plain}"
-        echo -e "${yellow}Let's Encrypt now supports both domains and IP addresses!${plain}"
+        echo -e "${yellow}You can choose Let's Encrypt or ZeroSSL for ACME certificates.${plain}"
         echo ""
         
         if [[ -z "${server_ip}" ]]; then

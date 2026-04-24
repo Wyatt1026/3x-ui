@@ -307,7 +307,7 @@ check_config() {
         fi
     else
         echo -e "${red}⚠ WARNING: No SSL certificate configured!${plain}"
-        echo -e "${yellow}You can get a Let's Encrypt certificate for your IP address (valid ~6 days, auto-renews).${plain}"
+        echo -e "${yellow}You can get an ACME certificate for your IP address and choose Let's Encrypt or ZeroSSL.${plain}"
         read -rp "Generate SSL certificate for IP now? [y/N]: " gen_ssl
         if [[ "$gen_ssl" == "y" || "$gen_ssl" == "Y" ]]; then
             stop >/dev/null 2>&1
@@ -1003,13 +1003,93 @@ install_acme() {
     return 0
 }
 
+acme_ca_name() {
+    case "$1" in
+    zerossl)
+        echo "ZeroSSL"
+        ;;
+    *)
+        echo "Let's Encrypt"
+        ;;
+    esac
+}
+
+prompt_acme_ca() {
+    local choice=""
+    ACME_CA="letsencrypt"
+    ACME_CA_NAME="$(acme_ca_name "${ACME_CA}")"
+
+    echo -e "${yellow}Choose certificate authority:${plain}"
+    echo -e "${green}1.${plain} Let's Encrypt"
+    echo -e "${green}2.${plain} ZeroSSL"
+    read -rp "Choose CA (default 1): " choice
+    choice="${choice// /}"
+
+    case "${choice}" in
+    2 | zerossl | ZeroSSL | ZEROSSL)
+        ACME_CA="zerossl"
+        ;;
+    esac
+    ACME_CA_NAME="$(acme_ca_name "${ACME_CA}")"
+    LOGI "Selected CA: ${ACME_CA_NAME}"
+}
+
+ensure_acme_ca_account() {
+    local acme_ca="${1:-letsencrypt}"
+    local acme_ca_display="$(acme_ca_name "${acme_ca}")"
+
+    ~/.acme.sh/acme.sh --set-default-ca --server "${acme_ca}" --force
+    if [ $? -ne 0 ]; then
+        LOGE "Failed to set default CA to ${acme_ca_display}."
+        return 1
+    fi
+
+    if [[ "${acme_ca}" == "zerossl" ]]; then
+        local account_email=""
+        while true; do
+            read -rp "Please enter your email for ZeroSSL account registration: " account_email
+            account_email="${account_email// /}"
+            if [[ "${account_email}" =~ ^[^@[:space:]]+@[^@[:space:]]+\.[^@[:space:]]+$ ]]; then
+                break
+            fi
+            LOGE "Invalid email format. Please try again."
+        done
+
+        ~/.acme.sh/acme.sh --register-account -m "${account_email}" --server "${acme_ca}"
+        if [ $? -ne 0 ]; then
+            LOGE "ZeroSSL account registration with email failed."
+            LOGI "If you have ZeroSSL EAB credentials, you can use them now."
+            local eab_kid=""
+            local eab_hmac_key=""
+            read -rp "Enter ZeroSSL EAB KID (leave empty to abort): " eab_kid
+            if [[ -z "${eab_kid}" ]]; then
+                return 1
+            fi
+            read -rsp "Enter ZeroSSL EAB HMAC key: " eab_hmac_key
+            echo
+            if [[ -z "${eab_hmac_key}" ]]; then
+                LOGE "ZeroSSL EAB HMAC key cannot be empty."
+                return 1
+            fi
+
+            ~/.acme.sh/acme.sh --register-account --server "${acme_ca}" --eab-kid "${eab_kid}" --eab-hmac-key "${eab_hmac_key}"
+            if [ $? -ne 0 ]; then
+                LOGE "ZeroSSL account registration with EAB credentials failed."
+                return 1
+            fi
+        fi
+    fi
+
+    return 0
+}
+
 ssl_cert_issue_main() {
-    echo -e "${green}\t1.${plain} Get SSL (Domain)"
+    echo -e "${green}\t1.${plain} Get SSL (Domain, choose CA)"
     echo -e "${green}\t2.${plain} Revoke"
     echo -e "${green}\t3.${plain} Force Renew"
     echo -e "${green}\t4.${plain} Show Existing Domains"
     echo -e "${green}\t5.${plain} Set Cert paths for the panel"
-    echo -e "${green}\t6.${plain} Get SSL for IP Address (6-day cert, auto-renews)"
+    echo -e "${green}\t6.${plain} Get SSL for IP Address (choose CA, auto-renews)"
     echo -e "${green}\t0.${plain} Back to Main Menu"
 
     read -rp "Choose an option: " choice
@@ -1104,9 +1184,9 @@ ssl_cert_issue_main() {
         ssl_cert_issue_main
         ;;
     6)
-        echo -e "${yellow}Let's Encrypt SSL Certificate for IP Address${plain}"
-        echo -e "This will obtain a certificate for your server's IP using the shortlived profile."
-        echo -e "${yellow}Certificate valid for ~6 days, auto-renews via acme.sh cron job.${plain}"
+        echo -e "${yellow}ACME SSL Certificate for IP Address${plain}"
+        echo -e "This will obtain a certificate for your server's IP using your selected CA."
+        echo -e "${yellow}Let's Encrypt IP certificates use the shortlived profile (~6 days); ZeroSSL uses its standard ACME flow.${plain}"
         echo -e "${yellow}Port 80 must be open and accessible from the internet.${plain}"
         confirm "Do you want to proceed?" "y"
         if [[ $? == 0 ]]; then
@@ -1124,7 +1204,7 @@ ssl_cert_issue_main() {
 
 ssl_cert_issue_for_ip() {
     LOGI "Starting automatic SSL certificate generation for server IP..."
-    LOGI "Using Let's Encrypt shortlived profile (~6 days validity, auto-renews)"
+    LOGI "You will be prompted to choose Let's Encrypt or ZeroSSL."
     
     local existing_webBasePath=$(${xui_folder}/x-ui setting -show true | grep -Eo 'webBasePath: .+' | awk '{print $2}')
     local existing_port=$(${xui_folder}/x-ui setting -show true | grep -Eo 'port: .+' | awk '{print $2}')
@@ -1191,9 +1271,9 @@ ssl_cert_issue_for_ip() {
     mkdir -p "$certPath"
     
     # Build domain arguments
-    local domain_args="-d ${server_ip}"
+    local domain_args=("-d" "${server_ip}")
     if [[ -n "$ipv6_addr" ]] && is_ipv6 "$ipv6_addr"; then
-        domain_args="${domain_args} -d ${ipv6_addr}"
+        domain_args+=("-d" "${ipv6_addr}")
         LOGI "Including IPv6 address: ${ipv6_addr}"
     fi
     
@@ -1207,7 +1287,7 @@ ssl_cert_issue_for_ip() {
     fi
     LOGI "Using port ${WebPort} to issue certificate for IP: ${server_ip}"
     if [[ "${WebPort}" -ne 80 ]]; then
-        LOGI "Reminder: Let's Encrypt still reaches port 80; forward external port 80 to ${WebPort} for validation."
+        LOGI "Reminder: the ACME CA still reaches port 80; forward external port 80 to ${WebPort} for validation."
     fi
 
     while true; do
@@ -1236,16 +1316,20 @@ ssl_cert_issue_for_ip() {
     # Reload command - restarts panel after renewal
     local reloadCmd="systemctl restart x-ui 2>/dev/null || rc-service x-ui restart 2>/dev/null"
     
-    # issue the certificate for IP with shortlived profile
-    ~/.acme.sh/acme.sh --set-default-ca --server letsencrypt --force
-    ~/.acme.sh/acme.sh --issue \
-        ${domain_args} \
-        --standalone \
-        --server letsencrypt \
-        --certificate-profile shortlived \
-        --days 6 \
-        --httpport ${WebPort} \
-        --force
+    prompt_acme_ca
+    ensure_acme_ca_account "${ACME_CA}"
+    if [ $? -ne 0 ]; then
+        return 1
+    fi
+
+    # issue the certificate for IP
+    local issue_args=(--issue "${domain_args[@]}" --standalone --server "${ACME_CA}" --httpport "${WebPort}" --force)
+    local cert_validity="90 days"
+    if [[ "${ACME_CA}" == "letsencrypt" ]]; then
+        issue_args+=(--certificate-profile shortlived --days 6)
+        cert_validity="~6 days"
+    fi
+    ~/.acme.sh/acme.sh "${issue_args[@]}"
     
     if [ $? -ne 0 ]; then
         LOGE "Failed to issue certificate for IP: ${server_ip}"
@@ -1256,7 +1340,7 @@ ssl_cert_issue_for_ip() {
         rm -rf ${certPath} 2>/dev/null
         return 1
     else
-        LOGI "Certificate issued successfully for IP: ${server_ip}"
+        LOGI "${ACME_CA_NAME} certificate issued successfully for IP: ${server_ip}"
     fi
     
     # Install the certificate
@@ -1293,7 +1377,8 @@ ssl_cert_issue_for_ip() {
         LOGI "Certificate configured for panel"
         LOGI "  - Certificate File: $webCertFile"
         LOGI "  - Private Key File: $webKeyFile"
-        LOGI "  - Validity: ~6 days (auto-renews via acme.sh cron)"
+        LOGI "  - Issuer: ${ACME_CA_NAME}"
+        LOGI "  - Validity: ${cert_validity} (auto-renews via acme.sh cron)"
         echo -e "${green}Access URL: https://${server_ip}:${existing_port}${existing_webBasePath}${plain}"
         LOGI "Panel will restart to apply SSL certificate..."
         restart
@@ -1315,6 +1400,12 @@ ssl_cert_issue() {
             LOGE "install acme failed, please check logs"
             exit 1
         fi
+    fi
+
+    prompt_acme_ca
+    ensure_acme_ca_account "${ACME_CA}"
+    if [ $? -ne 0 ]; then
+        exit 1
     fi
 
     # install socat
@@ -1375,23 +1466,24 @@ ssl_cert_issue() {
 
     # detect existing certificate and reuse it if present
     local cert_exists=0
+    local reissue_existing=0
     if ~/.acme.sh/acme.sh --list 2>/dev/null | awk '{print $1}' | grep -Fxq "${domain}"; then
         cert_exists=1
         local certInfo=$(~/.acme.sh/acme.sh --list 2>/dev/null | grep -F "${domain}")
         LOGI "Existing certificate found for ${domain}, will reuse it."
         [[ -n "${certInfo}" ]] && LOGI "${certInfo}"
+        read -rp "Issue a new certificate from ${ACME_CA_NAME} instead of reusing it? (y/n): " reissueCert
+        if [[ "${reissueCert}" == "y" || "${reissueCert}" == "Y" ]]; then
+            cert_exists=0
+            reissue_existing=1
+        fi
     else
-        LOGI "Your domain is ready for issuing certificates now..."
+        LOGI "Your domain is ready for issuing certificates from ${ACME_CA_NAME} now..."
     fi
 
     # create a directory for the certificate
     certPath="/root/cert/${domain}"
-    if [ ! -d "$certPath" ]; then
-        mkdir -p "$certPath"
-    else
-        rm -rf "$certPath"
-        mkdir -p "$certPath"
-    fi
+    mkdir -p "$certPath"
 
     # get the port number for the standalone server
     local WebPort=80
@@ -1404,14 +1496,15 @@ ssl_cert_issue() {
 
     if [[ ${cert_exists} -eq 0 ]]; then
         # issue the certificate
-        ~/.acme.sh/acme.sh --set-default-ca --server letsencrypt --force
-        ~/.acme.sh/acme.sh --issue -d ${domain} --listen-v6 --standalone --httpport ${WebPort} --force
+        ~/.acme.sh/acme.sh --issue -d ${domain} --listen-v6 --standalone --httpport ${WebPort} --server "${ACME_CA}" --force
         if [ $? -ne 0 ]; then
             LOGE "Issuing certificate failed, please check logs."
-            rm -rf ~/.acme.sh/${domain}
+            if [[ ${reissue_existing} -eq 0 ]]; then
+                rm -rf ~/.acme.sh/${domain}
+            fi
             exit 1
         else
-            LOGE "Issuing certificate succeeded, installing certificates..."
+            LOGI "${ACME_CA_NAME} certificate issued successfully, installing certificates..."
         fi
     else
         LOGI "Using existing certificate, installing certificates..."
@@ -1460,7 +1553,7 @@ ssl_cert_issue() {
         LOGI "Installing certificate succeeded, enabling auto renew..."
     else
         LOGE "Installing certificate failed, exiting."
-        if [[ ${cert_exists} -eq 0 ]]; then
+        if [[ ${cert_exists} -eq 0 && ${reissue_existing} -eq 0 ]]; then
             rm -rf ~/.acme.sh/${domain}
         fi
         exit 1
@@ -1526,6 +1619,12 @@ ssl_cert_issue_CF() {
             fi
         fi
 
+        prompt_acme_ca
+        ensure_acme_ca_account "${ACME_CA}"
+        if [ $? -ne 0 ]; then
+            exit 1
+        fi
+
         CF_Domain=""
 
         LOGD "Please set a domain name:"
@@ -1543,23 +1642,16 @@ ssl_cert_issue_CF() {
         read -rp "Input your email here: " CF_AccountEmail
         LOGD "Your registered email address is: ${CF_AccountEmail}"
 
-        # Set the default CA to Let's Encrypt
-        ~/.acme.sh/acme.sh --set-default-ca --server letsencrypt --force
-        if [ $? -ne 0 ]; then
-            LOGE "Default CA, Let'sEncrypt fail, script exiting..."
-            exit 1
-        fi
-
         export CF_Key="${CF_GlobalKey}"
         export CF_Email="${CF_AccountEmail}"
 
         # Issue the certificate using Cloudflare DNS
-        ~/.acme.sh/acme.sh --issue --dns dns_cf -d ${CF_Domain} -d *.${CF_Domain} --log --force
+        ~/.acme.sh/acme.sh --issue --dns dns_cf -d ${CF_Domain} -d *.${CF_Domain} --server "${ACME_CA}" --log --force
         if [ $? -ne 0 ]; then
             LOGE "Certificate issuance failed, script exiting..."
             exit 1
         else
-            LOGI "Certificate issued successfully, Installing..."
+            LOGI "${ACME_CA_NAME} certificate issued successfully, Installing..."
         fi
 
          # Install the certificate
@@ -2224,7 +2316,7 @@ show_menu() {
 │  ${green}18.${plain} Disable Autostart                         │
 │────────────────────────────────────────────────│
 │  ${green}19.${plain} SSL Certificate Management                │
-│  ${green}20.${plain} Cloudflare SSL Certificate                │
+│  ${green}20.${plain} Cloudflare SSL Certificate (choose CA)    │
 │  ${green}21.${plain} IP Limit Management                       │
 │  ${green}22.${plain} Firewall Management                       │
 │  ${green}23.${plain} SSH Port Forwarding Management            │
