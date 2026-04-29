@@ -9,6 +9,7 @@ blue='\033[0;34m'
 plain='\033[0m'
 
 APP_NAME="xray-node-manager"
+SCRIPT_VERSION="2026.04.29.1"
 XRAY_BIN="/usr/local/bin/xray"
 CONFIG_DIR="/usr/local/etc/${APP_NAME}"
 CONFIG_FILE="${CONFIG_DIR}/config.json"
@@ -790,7 +791,7 @@ delete_node() {
 }
 
 show_runtime_info() {
-    echo -e "${blue}独立 Xray 节点管理脚本${plain}"
+    echo -e "${blue}独立 Xray 节点管理脚本 v${SCRIPT_VERSION}${plain}"
     echo "配置目录: ${CONFIG_DIR}"
     echo "节点数量: $(awk -F'|' 'NF >= 5 { c++ } END { print c + 0 }' "$NODES_FILE" 2>/dev/null || echo 0)"
     echo "服务状态: $(service_status)"
