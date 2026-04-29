@@ -9,15 +9,17 @@ blue='\033[0;34m'
 plain='\033[0m'
 
 APP_NAME="xray-node-manager"
-SCRIPT_VERSION="2026.04.29.2"
+SCRIPT_VERSION="2026.04.29.3"
 XRAY_BIN="/usr/local/bin/xray"
 CONFIG_DIR="/usr/local/etc/${APP_NAME}"
 CONFIG_FILE="${CONFIG_DIR}/config.json"
 NODES_FILE="${CONFIG_DIR}/nodes.db"
 HOST_FILE="${CONFIG_DIR}/host"
+QUICK_PROXY_CMD="/usr/local/bin/quick-proxy"
 SERVICE_NAME="${APP_NAME}"
 SYSTEMD_SERVICE="/etc/systemd/system/${SERVICE_NAME}.service"
 OPENRC_SERVICE="/etc/init.d/${SERVICE_NAME}"
+SCRIPT_SOURCE_URL="https://raw.githubusercontent.com/Wyatt1026/3x-ui/main/quick-proxy.sh"
 OFFICIAL_XRAY_LATEST="https://github.com/XTLS/Xray-core/releases/latest/download"
 OFFICIAL_INSTALL_SCRIPT="https://github.com/XTLS/Xray-install/raw/main/install-release.sh"
 MAX_NODES="${XRAY_NODE_MAX_NODES:-200}"
@@ -63,6 +65,57 @@ install_pkg() {
         log_e "未找到可用包管理器，请先手动安装 ${pkg}。"
         return 1
     fi
+}
+
+copy_script_file() {
+    local source_path="$1"
+    local target_path="$2"
+    local tmp_target
+    [[ -f "$source_path" && -r "$source_path" ]] || return 1
+    mkdir -p "$(dirname "$target_path")"
+    tmp_target="${target_path}.tmp.$$"
+    if cp "$source_path" "$tmp_target" && chmod 755 "$tmp_target" && mv "$tmp_target" "$target_path"; then
+        return 0
+    fi
+    rm -f "$tmp_target"
+    return 1
+}
+
+download_panel_script() {
+    local output_path="$1"
+    need_cmd curl || install_pkg curl curl || return 1
+    curl -fsSL --retry 3 --connect-timeout 10 --max-time 60 \
+        -H 'Cache-Control: no-cache' \
+        -o "$output_path" \
+        "${SCRIPT_SOURCE_URL}?ts=$(date +%s)"
+}
+
+install_quick_proxy_command() {
+    local source_path real_source real_target tmp_script
+    source_path="${BASH_SOURCE[0]:-$0}"
+    real_source="$(readlink -f "$source_path" 2>/dev/null || true)"
+    real_target="$(readlink -f "$QUICK_PROXY_CMD" 2>/dev/null || true)"
+
+    if [[ -n "$real_source" && -n "$real_target" && "$real_source" == "$real_target" ]]; then
+        chmod 755 "$QUICK_PROXY_CMD" 2>/dev/null || true
+        return 0
+    fi
+
+    if copy_script_file "$source_path" "$QUICK_PROXY_CMD" 2>/dev/null; then
+        log_i "已安装快捷命令: quick-proxy"
+        return 0
+    fi
+
+    tmp_script="$(mktemp)"
+    if download_panel_script "$tmp_script" && bash -n "$tmp_script" && copy_script_file "$tmp_script" "$QUICK_PROXY_CMD"; then
+        rm -f "$tmp_script"
+        log_i "已安装快捷命令: quick-proxy"
+        return 0
+    fi
+
+    rm -f "$tmp_script"
+    log_w "未能安装快捷命令 quick-proxy，可稍后通过菜单更新面板重试。"
+    return 1
 }
 
 init_store() {
@@ -793,6 +846,36 @@ delete_node() {
     log_i "节点已删除。"
 }
 
+update_panel() {
+    local tmp_script new_version
+    tmp_script="$(mktemp)"
+
+    log_i "正在下载最新面板脚本..."
+    if ! download_panel_script "$tmp_script"; then
+        rm -f "$tmp_script"
+        log_e "下载面板脚本失败，请检查网络。"
+        return 1
+    fi
+
+    if ! bash -n "$tmp_script"; then
+        rm -f "$tmp_script"
+        log_e "下载的面板脚本语法检查失败，已放弃更新。"
+        return 1
+    fi
+
+    new_version="$(awk -F'"' '/^SCRIPT_VERSION=/ { print $2; exit }' "$tmp_script")"
+    if ! copy_script_file "$tmp_script" "$QUICK_PROXY_CMD"; then
+        rm -f "$tmp_script"
+        log_e "安装快捷命令 quick-proxy 失败。"
+        return 1
+    fi
+    rm -f "$tmp_script"
+
+    log_i "面板已更新: v${new_version:-unknown}"
+    log_i "快捷命令: quick-proxy"
+    exec "$QUICK_PROXY_CMD"
+}
+
 show_runtime_info() {
     echo -e "${blue}独立 Xray 节点管理脚本 v${SCRIPT_VERSION}${plain}"
     echo "配置目录: ${CONFIG_DIR}"
@@ -807,6 +890,7 @@ show_runtime_info() {
 menu() {
     need_root
     init_store
+    install_quick_proxy_command || true
     while true; do
         clear 2>/dev/null || true
         show_runtime_info
@@ -814,9 +898,10 @@ menu() {
         echo "2. 创建 VLESS + TCP 节点"
         echo "3. 查看已创建节点信息"
         echo "4. 删除节点"
-        echo "5. 退出"
+        echo "5. 更新面板"
+        echo "0. 退出"
         echo
-        read -r -p "请选择功能 [1-5]: " choice
+        read -r -p "请选择功能 [0-5]: " choice
         case "$choice" in
         1)
             create_node "ss" || log_e "创建 Shadowsocks 节点失败。"
@@ -836,10 +921,14 @@ menu() {
             pause
             ;;
         5)
+            update_panel || log_e "更新面板失败。"
+            pause
+            ;;
+        0)
             exit 0
             ;;
         *)
-            log_w "请输入 1-5。"
+            log_w "请输入 0-5。"
             sleep 1
             ;;
         esac
