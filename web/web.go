@@ -12,7 +12,6 @@ import (
 	"net"
 	"net/http"
 	"os"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -295,26 +294,9 @@ func (s *Server) initRouter() (*gin.Engine, error) {
 	return engine, nil
 }
 
-// normalizeExistingGeositeFiles normalizes country codes in all geosite .dat
-// files found in the bin directory so Xray-core can locate entries correctly.
-func normalizeExistingGeositeFiles() {
-	binDir := config.GetBinFolderPath()
-	matches, err := filepath.Glob(filepath.Join(binDir, "geosite*.dat"))
-	if err != nil {
-		logger.Warningf("Failed to glob geosite files: %v", err)
-		return
-	}
-	for _, path := range matches {
-		if err := service.NormalizeGeositeCountryCodes(path); err != nil {
-			logger.Warningf("Failed to normalize geosite country codes in %s: %v", path, err)
-		}
-	}
-}
-
 // startTask schedules background jobs (Xray checks, traffic jobs, cron
 // jobs) which the panel relies on for periodic maintenance and monitoring.
 func (s *Server) startTask() {
-	normalizeExistingGeositeFiles()
 	s.customGeoService.EnsureOnStartup()
 	err := s.xrayService.RestartXray(true)
 	if err != nil {
@@ -371,14 +353,17 @@ func (s *Server) startTask() {
 	isTgbotenabled, err := s.settingService.GetTgbotEnabled()
 	if (err == nil) && (isTgbotenabled) {
 		runtime, err := s.settingService.GetTgbotRuntime()
-		if err != nil || runtime == "" {
-			logger.Errorf("Add NewStatsNotifyJob error[%s], Runtime[%s] invalid, will run default", err, runtime)
+		if err != nil {
+			logger.Warningf("Add NewStatsNotifyJob: failed to load runtime: %v; using default @daily", err)
+			runtime = "@daily"
+		} else if strings.TrimSpace(runtime) == "" {
+			logger.Warning("Add NewStatsNotifyJob runtime is empty, using default @daily")
 			runtime = "@daily"
 		}
 		logger.Infof("Tg notify enabled,run at %s", runtime)
 		_, err = s.cron.AddJob(runtime, job.NewStatsNotifyJob())
 		if err != nil {
-			logger.Warning("Add NewStatsNotifyJob error", err)
+			logger.Warningf("Add NewStatsNotifyJob: failed to schedule runtime %q: %v", runtime, err)
 			return
 		}
 
