@@ -9,22 +9,29 @@ blue='\033[0;34m'
 plain='\033[0m'
 
 APP_NAME="xray-node-manager"
-SCRIPT_VERSION="2026.04.29.4"
-XRAY_BIN="/usr/local/bin/xray"
+SCRIPT_VERSION="2026.04.29.5"
+DEFAULT_PROXY_CORE="singbox"
+XRAY_BIN_DEFAULT="/usr/local/bin/xray"
+SINGBOX_BIN_DEFAULT="/usr/local/bin/sing-box"
 CONFIG_DIR="/usr/local/etc/${APP_NAME}"
 CONFIG_FILE="${CONFIG_DIR}/config.json"
 NODES_FILE="${CONFIG_DIR}/nodes.db"
 HOST_FILE="${CONFIG_DIR}/host"
+CORE_FILE="${CONFIG_DIR}/core"
 QUICK_PROXY_CMD="/usr/local/bin/quick-proxy"
 SERVICE_NAME="${APP_NAME}"
 SYSTEMD_SERVICE="/etc/systemd/system/${SERVICE_NAME}.service"
 OPENRC_SERVICE="/etc/init.d/${SERVICE_NAME}"
 SCRIPT_SOURCE_URL="https://raw.githubusercontent.com/Wyatt1026/3x-ui/main/quick-proxy.sh"
 OFFICIAL_XRAY_LATEST="https://github.com/XTLS/Xray-core/releases/latest/download"
-OFFICIAL_INSTALL_SCRIPT="https://github.com/XTLS/Xray-install/raw/main/install-release.sh"
+SINGBOX_RELEASE_API="https://api.github.com/repos/SagerNet/sing-box/releases/latest"
+SINGBOX_RELEASE_BASE="https://github.com/SagerNet/sing-box/releases/download"
 OFFICIAL_XRAY_SYSTEMD_SERVICE="/etc/systemd/system/xray.service"
 OFFICIAL_XRAY_OPENRC_SERVICE="/etc/init.d/xray"
 MAX_NODES="${XRAY_NODE_MAX_NODES:-200}"
+PROXY_CORE=""
+PROXY_NAME="Xray"
+PROXY_BIN="${XRAY_BIN_DEFAULT}"
 
 log_i() { echo -e "${green}[INF]${plain} $*"; }
 log_w() { echo -e "${yellow}[WRN]${plain} $*"; }
@@ -125,6 +132,100 @@ init_store() {
     touch "$NODES_FILE"
     chmod 700 "$CONFIG_DIR"
     chmod 600 "$NODES_FILE"
+}
+
+normalize_proxy_core() {
+    case "${1:-}" in
+    singbox | sing-box | sb)
+        printf 'singbox\n'
+        ;;
+    xray)
+        printf 'xray\n'
+        ;;
+    *)
+        return 1
+        ;;
+    esac
+}
+
+set_core_runtime_vars() {
+    case "$1" in
+    singbox)
+        PROXY_CORE="singbox"
+        PROXY_NAME="sing-box"
+        PROXY_BIN="$SINGBOX_BIN_DEFAULT"
+        ;;
+    xray)
+        PROXY_CORE="xray"
+        PROXY_NAME="Xray"
+        PROXY_BIN="$XRAY_BIN_DEFAULT"
+        ;;
+    *)
+        log_e "不支持的代理核心: $1"
+        return 1
+        ;;
+    esac
+}
+
+load_selected_core() {
+    local saved_core=""
+    if [[ -s "$CORE_FILE" ]]; then
+        saved_core="$(tr -d '\r\n' <"$CORE_FILE")"
+    fi
+
+    if ! saved_core="$(normalize_proxy_core "$saved_core" 2>/dev/null)"; then
+        saved_core="$DEFAULT_PROXY_CORE"
+    fi
+
+    set_core_runtime_vars "$saved_core"
+}
+
+persist_selected_core() {
+    [[ -n "$PROXY_CORE" ]] || return 1
+    printf '%s\n' "$PROXY_CORE" >"$CORE_FILE"
+    chmod 600 "$CORE_FILE"
+}
+
+choose_core_if_needed() {
+    local choice selected_core
+
+    if [[ -s "$CORE_FILE" ]]; then
+        load_selected_core
+        return 0
+    fi
+
+    if [[ -s "$CONFIG_FILE" ]] || (( $(node_count_file "$NODES_FILE") > 0 )); then
+        set_core_runtime_vars "xray"
+        persist_selected_core
+        log_i "检测到已有节点配置，已沿用历史核心: ${PROXY_NAME}"
+        return 0
+    fi
+
+    echo "请选择代理核心:"
+    echo "1. sing-box (默认)"
+    echo "2. Xray"
+    read -r -p "请输入 [1-2]，直接回车默认 sing-box: " choice
+    choice="$(sanitize_field "$choice")"
+
+    case "$choice" in
+    "" | 1)
+        selected_core="singbox"
+        ;;
+    2)
+        selected_core="xray"
+        ;;
+    singbox | sing-box | sb | xray)
+        selected_core="$(normalize_proxy_core "$choice")"
+        ;;
+    *)
+        log_w "输入无效，已默认选择 sing-box。"
+        selected_core="$DEFAULT_PROXY_CORE"
+        ;;
+    esac
+
+    set_core_runtime_vars "$selected_core"
+    persist_selected_core
+    log_i "已选择代理核心: ${PROXY_NAME}"
 }
 
 json_escape() {
@@ -266,7 +367,7 @@ port_in_use() {
     return 1
 }
 
-detect_arch() {
+detect_xray_arch() {
     case "$(uname -m)" in
     x86_64 | amd64) echo "64" ;;
     aarch64 | arm64) echo "arm64-v8a" ;;
@@ -280,12 +381,35 @@ detect_arch() {
     esac
 }
 
+detect_singbox_arch() {
+    case "$(uname -m)" in
+    x86_64 | amd64) echo "amd64" ;;
+    aarch64 | arm64) echo "arm64" ;;
+    armv7l) echo "armv7" ;;
+    armv6l) echo "armv6" ;;
+    i386 | i686) echo "386" ;;
+    *)
+        log_e "暂不支持当前架构: $(uname -m)"
+        return 1
+        ;;
+    esac
+}
+
+latest_singbox_version() {
+    install_pkg curl curl || return 1
+
+    local tag
+    tag="$(curl -fsSL --retry 3 --connect-timeout 10 --max-time 60 "$SINGBOX_RELEASE_API" | awk -F'"' '/"tag_name":/ { print $4; exit }')"
+    [[ -n "$tag" ]] || return 1
+    printf '%s\n' "${tag#v}"
+}
+
 install_xray_from_release() {
     install_pkg curl curl
     install_pkg unzip unzip
 
     local arch tmp zip url
-    arch="$(detect_arch)"
+    arch="$(detect_xray_arch)"
     tmp="$(mktemp -d)"
     zip="${tmp}/xray.zip"
     url="${OFFICIAL_XRAY_LATEST}/Xray-linux-${arch}.zip"
@@ -305,42 +429,75 @@ install_xray_from_release() {
         log_w "未完成 sha256 校验，将继续使用 GitHub 官方下载文件。"
     fi
     unzip -q "$zip" -d "$tmp"
-    install -m 755 "${tmp}/xray" "$XRAY_BIN"
+    install -m 755 "${tmp}/xray" "$XRAY_BIN_DEFAULT"
     rm -rf "$tmp"
 }
 
-install_xray_with_official_script() {
-    install_pkg curl curl
-    log_i "尝试使用 XTLS/Xray-install 官方脚本安装 Xray。"
-    bash -c "$(curl -fL --retry 3 --connect-timeout 10 --max-time 180 "$OFFICIAL_INSTALL_SCRIPT")" @ install --without-geodata --without-logfiles
-    if need_cmd systemctl; then
-        systemctl disable --now xray >/dev/null 2>&1 || true
+install_singbox_from_release() {
+    install_pkg curl curl || return 1
+    need_cmd tar || install_pkg tar tar || return 1
+
+    local arch version tmp archive url binary_path
+    arch="$(detect_singbox_arch)"
+    version="$(latest_singbox_version)" || {
+        log_e "获取 sing-box 最新版本失败。"
+        return 1
+    }
+
+    tmp="$(mktemp -d)"
+    archive="${tmp}/sing-box.tar.gz"
+    url="${SINGBOX_RELEASE_BASE}/v${version}/sing-box-${version}-linux-${arch}.tar.gz"
+
+    log_i "从 SagerNet/sing-box 官方 release 下载 sing-box: ${url}"
+    curl -fL --retry 3 --connect-timeout 10 --max-time 180 -o "$archive" "$url"
+    tar -xzf "$archive" -C "$tmp"
+    binary_path="$(find "$tmp" -type f -name 'sing-box' | head -n 1)"
+    if [[ -z "$binary_path" || ! -f "$binary_path" ]]; then
+        rm -rf "$tmp"
+        log_e "sing-box 压缩包中未找到可执行文件。"
+        return 1
     fi
+    install -m 755 "$binary_path" "$SINGBOX_BIN_DEFAULT"
+    rm -rf "$tmp"
 }
 
-ensure_xray() {
-    if [[ -x "$XRAY_BIN" ]]; then
-        return 0
-    fi
-    if need_cmd xray; then
-        XRAY_BIN="$(command -v xray)"
+ensure_proxy_binary() {
+    choose_core_if_needed
+
+    if [[ -x "$PROXY_BIN" ]]; then
         return 0
     fi
 
-    log_w "未检测到 Xray，开始自动安装。"
-    if need_cmd systemctl; then
-        install_xray_with_official_script || install_xray_from_release
-    else
+    case "$PROXY_CORE" in
+    singbox)
+        if need_cmd sing-box; then
+            PROXY_BIN="$(command -v sing-box)"
+            return 0
+        fi
+        log_w "未检测到 ${PROXY_NAME}，开始自动安装。"
+        install_singbox_from_release
+        ;;
+    xray)
+        if need_cmd xray; then
+            PROXY_BIN="$(command -v xray)"
+            return 0
+        fi
+        log_w "未检测到 ${PROXY_NAME}，开始自动安装。"
         install_xray_from_release
-    fi
+        ;;
+    *)
+        log_e "未知代理核心: ${PROXY_CORE}"
+        exit 1
+        ;;
+    esac
 
-    if [[ ! -x "$XRAY_BIN" ]]; then
-        log_e "Xray 安装失败，未找到 ${XRAY_BIN}。"
+    if [[ ! -x "$PROXY_BIN" ]]; then
+        log_e "${PROXY_NAME} 安装失败，未找到 ${PROXY_BIN}。"
         exit 1
     fi
 }
 
-render_config_from_nodes() {
+render_xray_config_from_nodes() {
     local nodes_path="$1"
     local output_path="$2"
     local first=1
@@ -440,12 +597,148 @@ JSON_TAIL
     } >"$output_path"
 }
 
+render_singbox_config_from_nodes() {
+    local nodes_path="$1"
+    local output_path="$2"
+    local first=1
+    local node_id protocol remark listen port method password uuid created entry_host
+
+    {
+        cat <<'JSON_HEAD'
+{
+  "log": {
+    "level": "warn"
+  },
+  "inbounds": [
+JSON_HEAD
+
+        while IFS='|' read -r node_id protocol remark listen port method password uuid created entry_host; do
+            [[ -z "${node_id:-}" || "${node_id:0:1}" == "#" ]] && continue
+            [[ "$protocol" == "ss" || "$protocol" == "vless" ]] || continue
+
+            if [[ "$first" -eq 0 ]]; then
+                printf ',\n'
+            fi
+            first=0
+
+            local tag safe_remark safe_listen safe_method safe_password safe_uuid
+            safe_remark="$(json_escape "$remark")"
+            safe_listen="$(json_escape "${listen:-0.0.0.0}")"
+            tag="$(json_escape "${protocol}-${remark}-${port}")"
+
+            if [[ "$protocol" == "ss" ]]; then
+                safe_method="$(json_escape "$method")"
+                safe_password="$(json_escape "$password")"
+                cat <<JSON_SS
+    {
+      "type": "shadowsocks",
+      "tag": "${tag}",
+      "listen": "${safe_listen}",
+      "listen_port": ${port},
+      "method": "${safe_method}",
+      "password": "${safe_password}"
+    }
+JSON_SS
+            else
+                safe_uuid="$(json_escape "$uuid")"
+                cat <<JSON_VLESS
+    {
+      "type": "vless",
+      "tag": "${tag}",
+      "listen": "${safe_listen}",
+      "listen_port": ${port},
+      "users": [
+        {
+          "name": "${safe_remark}",
+          "uuid": "${safe_uuid}"
+        }
+      ]
+    }
+JSON_VLESS
+            fi
+        done <"$nodes_path"
+
+        cat <<'JSON_TAIL'
+
+  ],
+  "outbounds": [
+    {
+      "type": "direct",
+      "tag": "direct"
+    },
+    {
+      "type": "block",
+      "tag": "block"
+    }
+  ]
+}
+JSON_TAIL
+    } >"$output_path"
+}
+
+render_config_from_nodes() {
+    choose_core_if_needed
+    case "$PROXY_CORE" in
+    singbox)
+        render_singbox_config_from_nodes "$1" "$2"
+        ;;
+    xray)
+        render_xray_config_from_nodes "$1" "$2"
+        ;;
+    *)
+        log_e "未知代理核心: ${PROXY_CORE}"
+        return 1
+        ;;
+    esac
+}
+
+validate_xray_config() {
+    local file="$1"
+    "$PROXY_BIN" test -config "$file" >/tmp/${APP_NAME}-config-test.log 2>&1 && return 0
+    "$PROXY_BIN" run -test -config "$file" >/tmp/${APP_NAME}-config-test.log 2>&1 && return 0
+    cat "/tmp/${APP_NAME}-config-test.log" >&2 || true
+    return 1
+}
+
+validate_singbox_config() {
+    local file="$1"
+    "$PROXY_BIN" check -c "$file" >/tmp/${APP_NAME}-config-test.log 2>&1 && return 0
+    cat "/tmp/${APP_NAME}-config-test.log" >&2 || true
+    return 1
+}
+
 validate_config() {
     local file="$1"
-    "$XRAY_BIN" test -config "$file" >/tmp/${APP_NAME}-xray-test.log 2>&1 && return 0
-    "$XRAY_BIN" run -test -config "$file" >/tmp/${APP_NAME}-xray-test.log 2>&1 && return 0
-    cat "/tmp/${APP_NAME}-xray-test.log" >&2 || true
-    return 1
+    choose_core_if_needed
+
+    case "$PROXY_CORE" in
+    singbox)
+        validate_singbox_config "$file"
+        ;;
+    xray)
+        validate_xray_config "$file"
+        ;;
+    *)
+        log_e "未知代理核心: ${PROXY_CORE}"
+        return 1
+        ;;
+    esac
+}
+
+proxy_run_args() {
+    choose_core_if_needed
+
+    case "$PROXY_CORE" in
+    singbox)
+        printf 'run -c %s' "$CONFIG_FILE"
+        ;;
+    xray)
+        printf 'run -config %s' "$CONFIG_FILE"
+        ;;
+    *)
+        return 1
+        ;;
+    esac
 }
 
 make_tmp_config() {
@@ -472,20 +765,22 @@ service_backend() {
 }
 
 install_service() {
-    local backend
+    local backend exec_args
     backend="$(service_backend)"
+    choose_core_if_needed
+    exec_args="$(proxy_run_args)"
 
     case "$backend" in
     systemd)
         cat >"$SYSTEMD_SERVICE" <<EOF
 [Unit]
-Description=Standalone Xray Node Manager
+Description=Standalone Proxy Node Manager (${PROXY_NAME})
 After=network-online.target
 Wants=network-online.target
 
 [Service]
 Type=simple
-ExecStart=${XRAY_BIN} run -config ${CONFIG_FILE}
+ExecStart=${PROXY_BIN} ${exec_args}
 Restart=on-failure
 RestartSec=3s
 LimitNOFILE=65535
@@ -503,9 +798,9 @@ EOF
         cat >"$OPENRC_SERVICE" <<EOF
 #!/sbin/openrc-run
 
-description="Standalone Xray Node Manager"
-command="${XRAY_BIN}"
-command_args="run -config ${CONFIG_FILE}"
+description="Standalone Proxy Node Manager (${PROXY_NAME})"
+command="${PROXY_BIN}"
+command_args="${exec_args}"
 command_background=true
 pidfile="/run/${SERVICE_NAME}.pid"
 
@@ -765,7 +1060,7 @@ commit_new_node() {
     if ! validate_config "$tmp_config"; then
         rm -f "$tmp_nodes"
         cleanup_tmp_config "$tmp_config"
-        log_e "生成的 Xray 配置未通过校验，已放弃写入。"
+        log_e "生成的 ${PROXY_NAME} 配置未通过校验，已放弃写入。"
         return 1
     fi
 
@@ -787,7 +1082,7 @@ commit_new_node() {
 create_node() {
     local protocol="$1"
     init_store
-    ensure_xray
+    ensure_proxy_binary
     ask_remark_and_port || return 0
     ask_entry_host || return 0
     commit_new_node "$protocol" "$REPLY_REMARK" "$REPLY_PORT" "$REPLY_ENTRY_HOST"
@@ -815,6 +1110,8 @@ delete_node() {
         return 0
     fi
 
+    ensure_proxy_binary
+
     local tmp_nodes tmp_config
     tmp_nodes="$(mktemp)"
     tmp_config="$(make_tmp_config)"
@@ -824,7 +1121,7 @@ delete_node() {
         if ! validate_config "$tmp_config"; then
             rm -f "$tmp_nodes"
             cleanup_tmp_config "$tmp_config"
-            log_e "删除后的 Xray 配置未通过校验，已放弃写入。"
+            log_e "删除后的 ${PROXY_NAME} 配置未通过校验，已放弃写入。"
             return 1
         fi
         mv "$tmp_config" "$CONFIG_FILE"
@@ -884,8 +1181,12 @@ uninstall_panel() {
     real_script="$(readlink -f "$script_path" 2>/dev/null || true)"
     real_quick="$(readlink -f "$QUICK_PROXY_CMD" 2>/dev/null || true)"
 
-    echo -e "${yellow}此操作将卸载独立 Xray 节点管理器，并删除所有节点配置、服务、自启动项、快捷命令和脚本文件。${plain}"
-    echo -e "${yellow}同时会移除本脚本安装的 /usr/local/bin/xray 及其官方服务残留。${plain}"
+    if [[ -z "$PROXY_CORE" && -s "$CORE_FILE" ]]; then
+        load_selected_core
+    fi
+
+    echo -e "${yellow}此操作将卸载独立代理节点管理器，并删除所有节点配置、服务、自启动项、快捷命令和脚本文件。${plain}"
+    echo -e "${yellow}同时会移除本脚本安装的 /usr/local/bin/xray、/usr/local/bin/sing-box 及其相关服务残留。${plain}"
     read -r -p "确认一键卸载？[y/N]: " confirm
     confirm="$(sanitize_field "$confirm")"
     case "$confirm" in
@@ -920,7 +1221,7 @@ uninstall_panel() {
 
     rm -rf "$CONFIG_DIR"
     rm -rf /usr/local/etc/xray /usr/local/share/xray /var/log/xray
-    rm -f /usr/local/bin/xray /usr/local/bin/xray.sig
+    rm -f "$XRAY_BIN_DEFAULT" "$SINGBOX_BIN_DEFAULT" /usr/local/bin/xray.sig
     rm -f "$QUICK_PROXY_CMD"
 
     if [[ -n "$real_script" && -f "$real_script" ]]; then
@@ -931,17 +1232,39 @@ uninstall_panel() {
         rm -f "$script_path"
     fi
 
-    log_i "独立 Xray 节点管理器已卸载。"
+    log_i "独立代理节点管理器已卸载。"
     exit 0
 }
 
 show_runtime_info() {
-    echo -e "${blue}独立 Xray 节点管理脚本 v${SCRIPT_VERSION}${plain}"
+    local version_bin=""
+
+    if [[ -z "$PROXY_CORE" ]]; then
+        if [[ -s "$CORE_FILE" ]]; then
+            load_selected_core
+        else
+            set_core_runtime_vars "$DEFAULT_PROXY_CORE"
+        fi
+    fi
+
+    echo -e "${blue}独立代理节点管理脚本 v${SCRIPT_VERSION}${plain}"
+    echo "当前核心: ${PROXY_NAME}"
     echo "配置目录: ${CONFIG_DIR}"
     echo "节点数量: $(awk -F'|' 'NF >= 5 { c++ } END { print c + 0 }' "$NODES_FILE" 2>/dev/null || echo 0)"
     echo "服务状态: $(service_status)"
-    if [[ -x "$XRAY_BIN" ]]; then
-        "$XRAY_BIN" version 2>/dev/null | head -n 1 || true
+    version_bin="$PROXY_BIN"
+    if [[ ! -x "$version_bin" ]]; then
+        case "$PROXY_CORE" in
+        singbox)
+            need_cmd sing-box && version_bin="$(command -v sing-box)"
+            ;;
+        xray)
+            need_cmd xray && version_bin="$(command -v xray)"
+            ;;
+        esac
+    fi
+    if [[ -n "$version_bin" && -x "$version_bin" ]]; then
+        "$version_bin" version 2>/dev/null | head -n 1 || true
     fi
     echo
 }
@@ -950,6 +1273,7 @@ menu() {
     need_root
     init_store
     install_quick_proxy_command || true
+    choose_core_if_needed
     while true; do
         clear 2>/dev/null || true
         show_runtime_info
@@ -976,7 +1300,6 @@ menu() {
             pause
             ;;
         4)
-            ensure_xray
             delete_node || log_e "删除节点失败。"
             pause
             ;;
