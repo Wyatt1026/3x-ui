@@ -153,6 +153,37 @@ valid_port() {
     ((port >= 1 && port <= 65535))
 }
 
+valid_ipv4() {
+    local ip="${1:-}" octet
+    local -a octets
+    [[ "$ip" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]] || return 1
+    IFS='.' read -r -a octets <<<"$ip"
+    for octet in "${octets[@]}"; do
+        ((10#$octet <= 255)) || return 1
+    done
+}
+
+valid_domain() {
+    local domain="${1:-}" label last_label=""
+    local -a labels
+    (( ${#domain} >= 1 && ${#domain} <= 253 )) || return 1
+    [[ "$domain" =~ ^[A-Za-z0-9.-]+$ ]] || return 1
+    [[ "$domain" != .* && "$domain" != *. && "$domain" != *..* ]] || return 1
+    [[ ! "$domain" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]] || return 1
+
+    IFS='.' read -r -a labels <<<"$domain"
+    for label in "${labels[@]}"; do
+        ((${#label} >= 1 && ${#label} <= 63)) || return 1
+        [[ "$label" =~ ^[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?$ ]] || return 1
+        last_label="$label"
+    done
+    [[ "$last_label" =~ [A-Za-z] ]]
+}
+
+valid_entry_host() {
+    valid_ipv4 "$1" || valid_domain "$1"
+}
+
 port_exists_in_nodes() {
     local port="$1"
     awk -F'|' -v p="$port" 'NF >= 5 && $5 == p { found = 1 } END { exit found ? 0 : 1 }' "$NODES_FILE"
@@ -267,7 +298,7 @@ render_config_from_nodes() {
   "inbounds": [
 JSON_HEAD
 
-        while IFS='|' read -r node_id protocol remark listen port method password uuid created; do
+        while IFS='|' read -r node_id protocol remark listen port method password uuid created entry_host; do
             [[ -z "${node_id:-}" || "${node_id:0:1}" == "#" ]] && continue
             [[ "$protocol" == "ss" || "$protocol" == "vless" ]] || continue
 
@@ -480,21 +511,34 @@ service_status() {
 
 detect_public_host() {
     if [[ -n "${XRAY_NODE_HOST:-}" ]]; then
-        printf '%s' "$XRAY_NODE_HOST"
-        return 0
+        if valid_entry_host "$XRAY_NODE_HOST"; then
+            printf '%s' "$XRAY_NODE_HOST"
+            return 0
+        fi
+        log_w "XRAY_NODE_HOST 不是 IPv4 或域名，已忽略。"
     fi
     if [[ -s "$HOST_FILE" ]]; then
-        cat "$HOST_FILE"
-        return 0
+        local saved_host
+        saved_host="$(tr -d '\r\n' <"$HOST_FILE")"
+        if valid_entry_host "$saved_host"; then
+            printf '%s' "$saved_host"
+            return 0
+        fi
     fi
 
-    local host=""
+    local host="" candidate
     if need_cmd curl; then
         host="$(curl -4fsS --connect-timeout 3 --max-time 5 https://api.ipify.org 2>/dev/null || true)"
         [[ -z "$host" ]] && host="$(curl -4fsS --connect-timeout 3 --max-time 5 https://ifconfig.me/ip 2>/dev/null || true)"
+        valid_ipv4 "$host" || host=""
     fi
     if [[ -z "$host" ]] && need_cmd hostname; then
-        host="$(hostname -I 2>/dev/null | awk '{print $1}' || true)"
+        for candidate in $(hostname -I 2>/dev/null || true); do
+            if valid_ipv4 "$candidate"; then
+                host="$candidate"
+                break
+            fi
+        done
     fi
     [[ -z "$host" ]] && host="YOUR_SERVER_IP"
     [[ "$host" != "YOUR_SERVER_IP" ]] && printf '%s' "$host" >"$HOST_FILE"
@@ -502,9 +546,9 @@ detect_public_host() {
 }
 
 node_link() {
-    local protocol="$1" remark="$2" port="$3" method="$4" password="$5" uuid="$6"
+    local protocol="$1" remark="$2" port="$3" method="$4" password="$5" uuid="$6" entry_host="${7:-}"
     local host encoded_remark
-    host="$(detect_public_host)"
+    host="${entry_host:-$(detect_public_host)}"
     encoded_remark="$(urlencode "$remark")"
 
     if [[ "$protocol" == "ss" ]]; then
@@ -517,14 +561,16 @@ node_link() {
 }
 
 print_node_line() {
-    local node_id="$1" protocol="$2" remark="$3" listen="$4" port="$5" method="$6" password="$7" uuid="$8" created="$9"
-    local proto_name
+    local node_id="$1" protocol="$2" remark="$3" listen="$4" port="$5" method="$6" password="$7" uuid="$8" created="$9" entry_host="${10:-}"
+    local proto_name display_host
     [[ "$protocol" == "ss" ]] && proto_name="Shadowsocks" || proto_name="VLESS + TCP"
+    display_host="${entry_host:-$(detect_public_host)}"
 
     echo -e "${blue}--------------------------------------------------${plain}"
     echo "ID: ${node_id}"
     echo "协议: ${proto_name}"
     echo "备注: ${remark}"
+    echo "入口地址: ${display_host}"
     echo "监听: ${listen}"
     echo "端口: ${port}"
     if [[ "$protocol" == "ss" ]]; then
@@ -537,7 +583,7 @@ print_node_line() {
     fi
     echo "创建时间: ${created}"
     echo "链接:"
-    node_link "$protocol" "$remark" "$port" "$method" "$password" "$uuid"
+    node_link "$protocol" "$remark" "$port" "$method" "$password" "$uuid" "$entry_host"
 }
 
 list_nodes() {
@@ -547,9 +593,9 @@ list_nodes() {
         return 0
     fi
 
-    while IFS='|' read -r node_id protocol remark listen port method password uuid created; do
+    while IFS='|' read -r node_id protocol remark listen port method password uuid created entry_host; do
         [[ -z "${node_id:-}" || "${node_id:0:1}" == "#" ]] && continue
-        print_node_line "$node_id" "$protocol" "$remark" "$listen" "$port" "$method" "$password" "$uuid" "$created"
+        print_node_line "$node_id" "$protocol" "$remark" "$listen" "$port" "$method" "$password" "$uuid" "$created" "$entry_host"
     done <"$NODES_FILE"
     echo -e "${blue}--------------------------------------------------${plain}"
     echo "服务状态: $(service_status)"
@@ -591,8 +637,37 @@ ask_remark_and_port() {
     REPLY_PORT="$port"
 }
 
+ask_entry_host() {
+    local custom entry_host
+    read -r -p "是否自定义入口 IP/域名？默认否，自动使用出口 IP [y/N]: " custom
+    custom="$(sanitize_field "$custom")"
+
+    case "$custom" in
+    y | Y | yes | YES | Yes)
+        while true; do
+            read -r -p "请输入入口 IPv4 或域名: " entry_host
+            entry_host="$(sanitize_field "$entry_host")"
+            if valid_entry_host "$entry_host"; then
+                break
+            fi
+            log_w "入口地址格式不正确，请输入 IPv4 或域名。"
+        done
+        ;;
+    *)
+        entry_host="$(detect_public_host)"
+        if [[ "$entry_host" == "YOUR_SERVER_IP" ]]; then
+            log_w "未能自动检测出口 IP，链接中将暂用 YOUR_SERVER_IP。"
+        else
+            log_i "将使用出口 IP 作为入口地址: ${entry_host}"
+        fi
+        ;;
+    esac
+
+    REPLY_ENTRY_HOST="$entry_host"
+}
+
 commit_new_node() {
-    local protocol="$1" remark="$2" port="$3"
+    local protocol="$1" remark="$2" port="$3" entry_host="$4"
     local node_id listen method password uuid created tmp_nodes tmp_config
 
     node_id="$(date +%s)-$(random_hex 5)"
@@ -612,7 +687,7 @@ commit_new_node() {
     tmp_nodes="$(mktemp)"
     tmp_config="$(mktemp)"
     cat "$NODES_FILE" >"$tmp_nodes"
-    printf '%s|%s|%s|%s|%s|%s|%s|%s|%s\n' "$node_id" "$protocol" "$remark" "$listen" "$port" "$method" "$password" "$uuid" "$created" >>"$tmp_nodes"
+    printf '%s|%s|%s|%s|%s|%s|%s|%s|%s|%s\n' "$node_id" "$protocol" "$remark" "$listen" "$port" "$method" "$password" "$uuid" "$created" "$entry_host" >>"$tmp_nodes"
 
     render_config_from_nodes "$tmp_nodes" "$tmp_config"
     if ! validate_config "$tmp_config"; then
@@ -632,7 +707,7 @@ commit_new_node() {
     fi
 
     log_i "节点创建成功。"
-    print_node_line "$node_id" "$protocol" "$remark" "$listen" "$port" "$method" "$password" "$uuid" "$created"
+    print_node_line "$node_id" "$protocol" "$remark" "$listen" "$port" "$method" "$password" "$uuid" "$created" "$entry_host"
 }
 
 create_node() {
@@ -640,7 +715,8 @@ create_node() {
     init_store
     ensure_xray
     ask_remark_and_port || return 0
-    commit_new_node "$protocol" "$REPLY_REMARK" "$REPLY_PORT"
+    ask_entry_host || return 0
+    commit_new_node "$protocol" "$REPLY_REMARK" "$REPLY_PORT" "$REPLY_ENTRY_HOST"
 }
 
 delete_node() {
