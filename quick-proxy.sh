@@ -9,7 +9,7 @@ blue='\033[0;34m'
 plain='\033[0m'
 
 APP_NAME="xray-node-manager"
-SCRIPT_VERSION="2026.04.29.3"
+SCRIPT_VERSION="2026.04.29.4"
 XRAY_BIN="/usr/local/bin/xray"
 CONFIG_DIR="/usr/local/etc/${APP_NAME}"
 CONFIG_FILE="${CONFIG_DIR}/config.json"
@@ -22,6 +22,8 @@ OPENRC_SERVICE="/etc/init.d/${SERVICE_NAME}"
 SCRIPT_SOURCE_URL="https://raw.githubusercontent.com/Wyatt1026/3x-ui/main/quick-proxy.sh"
 OFFICIAL_XRAY_LATEST="https://github.com/XTLS/Xray-core/releases/latest/download"
 OFFICIAL_INSTALL_SCRIPT="https://github.com/XTLS/Xray-install/raw/main/install-release.sh"
+OFFICIAL_XRAY_SYSTEMD_SERVICE="/etc/systemd/system/xray.service"
+OFFICIAL_XRAY_OPENRC_SERVICE="/etc/init.d/xray"
 MAX_NODES="${XRAY_NODE_MAX_NODES:-200}"
 
 log_i() { echo -e "${green}[INF]${plain} $*"; }
@@ -876,6 +878,63 @@ update_panel() {
     exec "$QUICK_PROXY_CMD"
 }
 
+uninstall_panel() {
+    local confirm backend script_path real_script real_quick
+    script_path="${BASH_SOURCE[0]:-$0}"
+    real_script="$(readlink -f "$script_path" 2>/dev/null || true)"
+    real_quick="$(readlink -f "$QUICK_PROXY_CMD" 2>/dev/null || true)"
+
+    echo -e "${yellow}此操作将卸载独立 Xray 节点管理器，并删除所有节点配置、服务、自启动项、快捷命令和脚本文件。${plain}"
+    echo -e "${yellow}同时会移除本脚本安装的 /usr/local/bin/xray 及其官方服务残留。${plain}"
+    read -r -p "确认一键卸载？[y/N]: " confirm
+    confirm="$(sanitize_field "$confirm")"
+    case "$confirm" in
+    y | Y | yes | YES | Yes) ;;
+    *)
+        log_w "已取消卸载。"
+        return 0
+        ;;
+    esac
+
+    backend="$(service_backend)"
+    case "$backend" in
+    systemd)
+        systemctl disable --now "$SERVICE_NAME" >/dev/null 2>&1 || true
+        rm -f "$SYSTEMD_SERVICE"
+        systemctl disable --now xray >/dev/null 2>&1 || true
+        rm -f "$OFFICIAL_XRAY_SYSTEMD_SERVICE"
+        systemctl daemon-reload >/dev/null 2>&1 || true
+        ;;
+    openrc)
+        rc-service "$SERVICE_NAME" stop >/dev/null 2>&1 || true
+        rc-update del "$SERVICE_NAME" default >/dev/null 2>&1 || true
+        rm -f "$OPENRC_SERVICE"
+        rc-service xray stop >/dev/null 2>&1 || true
+        rc-update del xray default >/dev/null 2>&1 || true
+        rm -f "$OFFICIAL_XRAY_OPENRC_SERVICE"
+        ;;
+    *)
+        stop_service
+        ;;
+    esac
+
+    rm -rf "$CONFIG_DIR"
+    rm -rf /usr/local/etc/xray /usr/local/share/xray /var/log/xray
+    rm -f /usr/local/bin/xray /usr/local/bin/xray.sig
+    rm -f "$QUICK_PROXY_CMD"
+
+    if [[ -n "$real_script" && -f "$real_script" ]]; then
+        if [[ -z "$real_quick" || "$real_script" != "$real_quick" ]]; then
+            rm -f "$real_script"
+        fi
+    elif [[ -f "$script_path" ]]; then
+        rm -f "$script_path"
+    fi
+
+    log_i "独立 Xray 节点管理器已卸载。"
+    exit 0
+}
+
 show_runtime_info() {
     echo -e "${blue}独立 Xray 节点管理脚本 v${SCRIPT_VERSION}${plain}"
     echo "配置目录: ${CONFIG_DIR}"
@@ -899,9 +958,10 @@ menu() {
         echo "3. 查看已创建节点信息"
         echo "4. 删除节点"
         echo "5. 更新面板"
+        echo "6. 一键卸载"
         echo "0. 退出"
         echo
-        read -r -p "请选择功能 [0-5]: " choice
+        read -r -p "请选择功能 [0-6]: " choice
         case "$choice" in
         1)
             create_node "ss" || log_e "创建 Shadowsocks 节点失败。"
@@ -924,11 +984,15 @@ menu() {
             update_panel || log_e "更新面板失败。"
             pause
             ;;
+        6)
+            uninstall_panel || log_e "一键卸载失败。"
+            pause
+            ;;
         0)
             exit 0
             ;;
         *)
-            log_w "请输入 0-5。"
+            log_w "请输入 0-6。"
             sleep 1
             ;;
         esac
