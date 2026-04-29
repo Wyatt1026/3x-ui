@@ -28,6 +28,14 @@ As an enhanced fork of the original X-UI project, 3X-UI provides improved stabil
 bash <(curl -Ls https://raw.githubusercontent.com/Wyatt1026/3x-ui/main/install.sh)
 ```
 
+## Quick Proxy
+
+Create lightweight standalone Shadowsocks or VLESS+TCP nodes with an interactive menu:
+
+```bash
+bash <(curl -Ls https://raw.githubusercontent.com/Wyatt1026/3x-ui/main/quick-proxy.sh)
+```
+
 For full documentation, please visit the [project Wiki](https://github.com/MHSanaei/3x-ui/wiki).
 
 ## A Special Thanks to
