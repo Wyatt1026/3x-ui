@@ -9,10 +9,11 @@ blue='\033[0;34m'
 plain='\033[0m'
 
 APP_NAME="xray-node-manager"
-SCRIPT_VERSION="2026.04.29.5"
+SCRIPT_VERSION="2026.04.29.7"
 DEFAULT_PROXY_CORE="singbox"
 XRAY_BIN_DEFAULT="/usr/local/bin/xray"
 SINGBOX_BIN_DEFAULT="/usr/local/bin/sing-box"
+SINGBOX_INSTALL_DIR="/usr/local/lib/sing-box"
 CONFIG_DIR="/usr/local/etc/${APP_NAME}"
 CONFIG_FILE="${CONFIG_DIR}/config.json"
 NODES_FILE="${CONFIG_DIR}/nodes.db"
@@ -395,11 +396,104 @@ detect_singbox_arch() {
     esac
 }
 
+detect_libc_variant() {
+    local ldd_output=""
+
+    if [[ -f /etc/alpine-release ]]; then
+        printf 'musl\n'
+        return 0
+    fi
+
+    if need_cmd ldd; then
+        ldd_output="$(ldd --version 2>&1 || true)"
+        case "$ldd_output" in
+        *musl*)
+            printf 'musl\n'
+            return 0
+            ;;
+        *glibc* | *"GNU C Library"* | *"GNU libc"* | *"GNU Libc"* | *"ldd (GNU libc)"*)
+            printf 'glibc\n'
+            return 0
+            ;;
+        esac
+    fi
+
+    if need_cmd getconf && getconf GNU_LIBC_VERSION >/dev/null 2>&1; then
+        printf 'glibc\n'
+    else
+        printf 'unknown\n'
+    fi
+}
+
+singbox_asset_suffixes() {
+    local arch="$1"
+    local libc_variant="$2"
+
+    case "$arch" in
+    amd64 | arm64 | armv7 | 386)
+        case "$libc_variant" in
+        musl)
+            printf '%s\n' '-musl' '' '-glibc'
+            ;;
+        glibc)
+            printf '%s\n' '-glibc' '' '-musl'
+            ;;
+        *)
+            printf '%s\n' '' '-glibc' '-musl'
+            ;;
+        esac
+        ;;
+    *)
+        printf '%s\n' ''
+        ;;
+    esac
+}
+
+verify_singbox_binary_path() {
+    local binary_path="$1"
+    local binary_dir version_log
+    binary_dir="$(dirname "$binary_path")"
+    version_log="/tmp/${APP_NAME}-singbox-candidate.log"
+
+    LD_LIBRARY_PATH="${binary_dir}${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}" "$binary_path" version >"$version_log" 2>&1 && return 0
+    cat "$version_log" >&2 || true
+    return 1
+}
+
+install_singbox_payload() {
+    local source_dir="$1"
+    local staging wrapper_tmp
+
+    [[ -x "${source_dir}/sing-box" ]] || return 1
+
+    mkdir -p "$(dirname "$SINGBOX_INSTALL_DIR")" "$(dirname "$SINGBOX_BIN_DEFAULT")"
+    staging="${SINGBOX_INSTALL_DIR}.tmp.$$"
+    wrapper_tmp="${SINGBOX_BIN_DEFAULT}.tmp.$$"
+    rm -rf "$staging" "$wrapper_tmp"
+    mkdir -p "$staging"
+
+    cp -R "${source_dir}/." "$staging"/
+    chmod 755 "${staging}/sing-box"
+
+    cat >"$wrapper_tmp" <<EOF
+#!/usr/bin/env sh
+SINGBOX_DIR="${SINGBOX_INSTALL_DIR}"
+export LD_LIBRARY_PATH="\${SINGBOX_DIR}\${LD_LIBRARY_PATH:+:\${LD_LIBRARY_PATH}}"
+exec "\${SINGBOX_DIR}/sing-box" "\$@"
+EOF
+    chmod 755 "$wrapper_tmp"
+
+    rm -rf "$SINGBOX_INSTALL_DIR"
+    mv "$staging" "$SINGBOX_INSTALL_DIR"
+    mv "$wrapper_tmp" "$SINGBOX_BIN_DEFAULT"
+}
+
 latest_singbox_version() {
     install_pkg curl curl || return 1
 
-    local tag
-    tag="$(curl -fsSL --retry 3 --connect-timeout 10 --max-time 60 "$SINGBOX_RELEASE_API" | awk -F'"' '/"tag_name":/ { print $4; exit }')"
+    local response tag
+    response="$(curl -fsSL --retry 3 --connect-timeout 10 --max-time 60 "$SINGBOX_RELEASE_API")" || return 1
+    tag="$(printf '%s' "$response" | awk -F'"' '/"tag_name":/ { print $4; exit }')"
     [[ -n "$tag" ]] || return 1
     printf '%s\n' "${tag#v}"
 }
@@ -437,42 +531,99 @@ install_singbox_from_release() {
     install_pkg curl curl || return 1
     need_cmd tar || install_pkg tar tar || return 1
 
-    local arch version tmp archive url binary_path
+    local arch version tmp archive binary_path libc_variant suffix candidate_url candidate_tmp
+    local candidate_index=0
+    local found_asset=0
     arch="$(detect_singbox_arch)"
     version="$(latest_singbox_version)" || {
         log_e "获取 sing-box 最新版本失败。"
         return 1
     }
+    libc_variant="$(detect_libc_variant)"
 
     tmp="$(mktemp -d)"
-    archive="${tmp}/sing-box.tar.gz"
-    url="${SINGBOX_RELEASE_BASE}/v${version}/sing-box-${version}-linux-${arch}.tar.gz"
 
-    log_i "从 SagerNet/sing-box 官方 release 下载 sing-box: ${url}"
-    curl -fL --retry 3 --connect-timeout 10 --max-time 180 -o "$archive" "$url"
-    tar -xzf "$archive" -C "$tmp"
-    binary_path="$(find "$tmp" -type f -name 'sing-box' | head -n 1)"
-    if [[ -z "$binary_path" || ! -f "$binary_path" ]]; then
+    while IFS= read -r suffix; do
+        candidate_index=$((candidate_index + 1))
+        candidate_tmp="${tmp}/candidate-${candidate_index}"
+        archive="${candidate_tmp}/sing-box.tar.gz"
+        candidate_url="${SINGBOX_RELEASE_BASE}/v${version}/sing-box-${version}-linux-${arch}${suffix}.tar.gz"
+        mkdir -p "$candidate_tmp"
+
+        log_i "检测到系统 libc: ${libc_variant}"
+        log_i "尝试下载 sing-box release 资产: ${candidate_url}"
+        if ! curl -fL --retry 3 --connect-timeout 10 --max-time 180 -o "$archive" "$candidate_url"; then
+            log_w "该 sing-box release 资产不可用，继续尝试下一个。"
+            continue
+        fi
+        found_asset=1
+
+        if ! tar -xzf "$archive" -C "$candidate_tmp"; then
+            log_w "该 sing-box 压缩包解压失败，继续尝试下一个。"
+            continue
+        fi
+
+        binary_path="$(find "$candidate_tmp" -type f -name 'sing-box' 2>/dev/null | sed -n '1p')"
+        if [[ -z "$binary_path" || ! -f "$binary_path" ]]; then
+            log_w "该 sing-box 压缩包中未找到可执行文件，继续尝试下一个。"
+            continue
+        fi
+        chmod 755 "$binary_path" 2>/dev/null || true
+
+        if ! verify_singbox_binary_path "$binary_path"; then
+            log_w "该 sing-box 二进制无法在当前系统执行，继续尝试下一个。"
+            continue
+        fi
+
+        if ! install_singbox_payload "$(dirname "$binary_path")"; then
+            rm -rf "$tmp"
+            log_e "安装 sing-box 文件失败。"
+            return 1
+        fi
         rm -rf "$tmp"
-        log_e "sing-box 压缩包中未找到可执行文件。"
-        return 1
-    fi
-    install -m 755 "$binary_path" "$SINGBOX_BIN_DEFAULT"
+        log_i "sing-box 已安装到 ${SINGBOX_BIN_DEFAULT}"
+        return 0
+    done < <(singbox_asset_suffixes "$arch" "$libc_variant")
+
     rm -rf "$tmp"
+
+    if [[ "$found_asset" -eq 0 ]]; then
+        log_e "未找到适用于当前系统的 sing-box release 资产（arch=${arch}, libc=${libc_variant}）。"
+    else
+        log_e "已找到 sing-box release 资产，但没有可在当前系统执行的版本。"
+    fi
+    return 1
+}
+
+verify_proxy_binary() {
+    local version_log
+    version_log="/tmp/${APP_NAME}-version.log"
+
+    "$PROXY_BIN" version >"$version_log" 2>&1 && return 0
+    cat "$version_log" >&2 || true
+    return 1
 }
 
 ensure_proxy_binary() {
     choose_core_if_needed
 
     if [[ -x "$PROXY_BIN" ]]; then
-        return 0
+        if verify_proxy_binary; then
+            return 0
+        fi
+        log_w "检测到现有 ${PROXY_NAME} 二进制不可执行，尝试重新安装。"
+        set_core_runtime_vars "$PROXY_CORE"
     fi
 
     case "$PROXY_CORE" in
     singbox)
         if need_cmd sing-box; then
             PROXY_BIN="$(command -v sing-box)"
-            return 0
+            if verify_proxy_binary; then
+                return 0
+            fi
+            log_w "PATH 中的 ${PROXY_NAME} 二进制不可执行，将改为重新安装。"
+            PROXY_BIN="$SINGBOX_BIN_DEFAULT"
         fi
         log_w "未检测到 ${PROXY_NAME}，开始自动安装。"
         install_singbox_from_release
@@ -480,7 +631,11 @@ ensure_proxy_binary() {
     xray)
         if need_cmd xray; then
             PROXY_BIN="$(command -v xray)"
-            return 0
+            if verify_proxy_binary; then
+                return 0
+            fi
+            log_w "PATH 中的 ${PROXY_NAME} 二进制不可执行，将改为重新安装。"
+            PROXY_BIN="$XRAY_BIN_DEFAULT"
         fi
         log_w "未检测到 ${PROXY_NAME}，开始自动安装。"
         install_xray_from_release
@@ -493,6 +648,15 @@ ensure_proxy_binary() {
 
     if [[ ! -x "$PROXY_BIN" ]]; then
         log_e "${PROXY_NAME} 安装失败，未找到 ${PROXY_BIN}。"
+        exit 1
+    fi
+
+    if ! verify_proxy_binary; then
+        if [[ "$PROXY_CORE" == "singbox" ]]; then
+            log_e "${PROXY_NAME} 安装后仍无法执行，可能是与当前系统的 libc 或架构不匹配。"
+        else
+            log_e "${PROXY_NAME} 安装后仍无法执行。"
+        fi
         exit 1
     fi
 }
@@ -1186,7 +1350,7 @@ uninstall_panel() {
     fi
 
     echo -e "${yellow}此操作将卸载独立代理节点管理器，并删除所有节点配置、服务、自启动项、快捷命令和脚本文件。${plain}"
-    echo -e "${yellow}同时会移除本脚本安装的 /usr/local/bin/xray、/usr/local/bin/sing-box 及其相关服务残留。${plain}"
+    echo -e "${yellow}同时会移除本脚本安装的 /usr/local/bin/xray、/usr/local/bin/sing-box、/usr/local/lib/sing-box 及其相关服务残留。${plain}"
     read -r -p "确认一键卸载？[y/N]: " confirm
     confirm="$(sanitize_field "$confirm")"
     case "$confirm" in
@@ -1221,6 +1385,7 @@ uninstall_panel() {
 
     rm -rf "$CONFIG_DIR"
     rm -rf /usr/local/etc/xray /usr/local/share/xray /var/log/xray
+    rm -rf "$SINGBOX_INSTALL_DIR"
     rm -f "$XRAY_BIN_DEFAULT" "$SINGBOX_BIN_DEFAULT" /usr/local/bin/xray.sig
     rm -f "$QUICK_PROXY_CMD"
 
