@@ -9,7 +9,7 @@ blue='\033[0;34m'
 plain='\033[0m'
 
 APP_NAME="xray-node-manager"
-SCRIPT_VERSION="2026.04.29.1"
+SCRIPT_VERSION="2026.04.29.2"
 XRAY_BIN="/usr/local/bin/xray"
 CONFIG_DIR="/usr/local/etc/${APP_NAME}"
 CONFIG_FILE="${CONFIG_DIR}/config.json"
@@ -289,6 +289,7 @@ render_config_from_nodes() {
     local nodes_path="$1"
     local output_path="$2"
     local first=1
+    local node_id protocol remark listen port method password uuid created entry_host
 
     {
         cat <<'JSON_HEAD'
@@ -602,6 +603,8 @@ print_node_line() {
 
 list_nodes() {
     init_store
+    local node_id protocol remark listen port method password uuid created entry_host
+
     if [[ ! -s "$NODES_FILE" ]]; then
         log_w "还没有创建任何节点。"
         return 0
