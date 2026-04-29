@@ -391,6 +391,19 @@ validate_config() {
     return 1
 }
 
+make_tmp_config() {
+    local tmp_dir
+    tmp_dir="$(mktemp -d)"
+    printf '%s/config.json' "$tmp_dir"
+}
+
+cleanup_tmp_config() {
+    local file="${1:-}"
+    [[ -n "$file" ]] || return 0
+    rm -f "$file"
+    rmdir "$(dirname "$file")" 2>/dev/null || true
+}
+
 service_backend() {
     if [[ -d /run/systemd/system ]] && need_cmd systemctl; then
         echo "systemd"
@@ -685,18 +698,20 @@ commit_new_node() {
     fi
 
     tmp_nodes="$(mktemp)"
-    tmp_config="$(mktemp)"
+    tmp_config="$(make_tmp_config)"
     cat "$NODES_FILE" >"$tmp_nodes"
     printf '%s|%s|%s|%s|%s|%s|%s|%s|%s|%s\n' "$node_id" "$protocol" "$remark" "$listen" "$port" "$method" "$password" "$uuid" "$created" "$entry_host" >>"$tmp_nodes"
 
     render_config_from_nodes "$tmp_nodes" "$tmp_config"
     if ! validate_config "$tmp_config"; then
-        rm -f "$tmp_nodes" "$tmp_config"
+        rm -f "$tmp_nodes"
+        cleanup_tmp_config "$tmp_config"
         log_e "生成的 Xray 配置未通过校验，已放弃写入。"
         return 1
     fi
 
     mv "$tmp_config" "$CONFIG_FILE"
+    cleanup_tmp_config "$tmp_config"
     mv "$tmp_nodes" "$NODES_FILE"
     chmod 600 "$NODES_FILE" "$CONFIG_FILE"
 
@@ -743,16 +758,18 @@ delete_node() {
 
     local tmp_nodes tmp_config
     tmp_nodes="$(mktemp)"
-    tmp_config="$(mktemp)"
+    tmp_config="$(make_tmp_config)"
     awk -F'|' -v id="$target" '$1 != id' "$NODES_FILE" >"$tmp_nodes"
     if (( $(node_count_file "$tmp_nodes") > 0 )); then
         render_config_from_nodes "$tmp_nodes" "$tmp_config"
         if ! validate_config "$tmp_config"; then
-            rm -f "$tmp_nodes" "$tmp_config"
+            rm -f "$tmp_nodes"
+            cleanup_tmp_config "$tmp_config"
             log_e "删除后的 Xray 配置未通过校验，已放弃写入。"
             return 1
         fi
         mv "$tmp_config" "$CONFIG_FILE"
+        cleanup_tmp_config "$tmp_config"
         mv "$tmp_nodes" "$NODES_FILE"
         chmod 600 "$NODES_FILE" "$CONFIG_FILE"
         install_service || return 1
@@ -763,6 +780,7 @@ delete_node() {
     else
         render_config_from_nodes "$tmp_nodes" "$tmp_config"
         mv "$tmp_config" "$CONFIG_FILE"
+        cleanup_tmp_config "$tmp_config"
         mv "$tmp_nodes" "$NODES_FILE"
         chmod 600 "$NODES_FILE" "$CONFIG_FILE"
         stop_service
