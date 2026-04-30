@@ -187,8 +187,24 @@ persist_selected_core() {
     chmod 600 "$CORE_FILE"
 }
 
+detect_existing_core_from_config() {
+    [[ -s "$CONFIG_FILE" ]] || return 1
+
+    if grep -q '"listen_port"[[:space:]]*:' "$CONFIG_FILE"; then
+        printf 'singbox\n'
+        return 0
+    fi
+
+    if grep -q '"loglevel"[[:space:]]*:' "$CONFIG_FILE"; then
+        printf 'xray\n'
+        return 0
+    fi
+
+    return 1
+}
+
 choose_core_if_needed() {
-    local choice selected_core
+    local choice selected_core detected_core
 
     if [[ -s "$CORE_FILE" ]]; then
         load_selected_core
@@ -196,10 +212,14 @@ choose_core_if_needed() {
     fi
 
     if [[ -s "$CONFIG_FILE" ]] || (( $(node_count_file "$NODES_FILE") > 0 )); then
-        set_core_runtime_vars "xray"
-        persist_selected_core
-        log_i "检测到已有节点配置，已沿用历史核心: ${PROXY_NAME}"
-        return 0
+        if detected_core="$(detect_existing_core_from_config 2>/dev/null)"; then
+            set_core_runtime_vars "$detected_core"
+            persist_selected_core
+            log_i "检测到已有节点配置，已沿用历史核心: ${PROXY_NAME}"
+            return 0
+        fi
+
+        log_w "检测到已有节点配置，但无法自动识别历史核心，请手动确认。"
     fi
 
     echo "请选择代理核心:"
@@ -1469,16 +1489,17 @@ migrate_ss_nodes() {
         return 0
     fi
 
+    local old_method="chacha20-ietf-poly1305"
     local new_method="2022-blake3-aes-256-gcm"
     local old_count
-    old_count="$(awk -F'|' -v m="$new_method" '$2 == "ss" && $6 != m { c++ } END { print c+0 }' "$NODES_FILE")"
+    old_count="$(awk -F'|' -v old="$old_method" '$2 == "ss" && $6 == old { c++ } END { print c+0 }' "$NODES_FILE")"
 
     if [[ "$old_count" -eq 0 ]]; then
-        log_i "所有 Shadowsocks 节点已使用 ${new_method} 加密，无需迁移。"
+        log_i "没有使用 ${old_method} 的 Shadowsocks 节点，无需迁移。"
         return 0
     fi
 
-    echo "检测到 ${old_count} 个节点使用旧加密方式，迁移后将自动生成新密码。"
+    echo "检测到 ${old_count} 个节点使用 ${old_method}，迁移后将切换为 ${new_method} 并自动生成新密码。"
     echo -e "${yellow}客户端需凭新密码重新连接。${plain}"
     read -r -p "确认迁移？[y/N]: " confirm
     confirm="$(sanitize_field "$confirm")"
@@ -1505,7 +1526,7 @@ migrate_ss_nodes() {
         local node_id protocol remark listen port method password uuid created entry_host
         IFS='|' read -r node_id protocol remark listen port method password uuid created entry_host <<<"$raw_line"
 
-        if [[ "$protocol" == "ss" && "$method" != "$new_method" ]]; then
+        if [[ "$protocol" == "ss" && "$method" == "$old_method" ]]; then
             local new_password
             new_password="$(random_password "$new_method")" || {
                 log_e "生成新密码失败，迁移中止。"
@@ -1557,7 +1578,7 @@ menu() {
         echo "2. 创建 VLESS + TCP 节点"
         echo "3. 查看已创建节点信息"
         echo "4. 删除节点"
-        echo "5. 迁移 SS 节点到 2022-blake3-aes-256-gcm"
+        echo "5. 迁移 chacha20-ietf-poly1305 到 2022-blake3-aes-256-gcm"
         echo "6. 更新面板"
         echo "7. 一键卸载"
         echo "0. 退出"
