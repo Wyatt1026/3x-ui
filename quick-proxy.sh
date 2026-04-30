@@ -265,7 +265,31 @@ b64_url_nopad() {
     base64 | tr -d '\n' | tr '+/' '-_' | sed 's/=*$//'
 }
 
+random_base64_bytes() {
+    local byte_len="$1"
+    if need_cmd openssl; then
+        openssl rand -base64 "$byte_len" | tr -d '\n'
+        return 0
+    fi
+    if need_cmd base64; then
+        dd if=/dev/urandom bs=1 count="$byte_len" 2>/dev/null | b64
+        return 0
+    fi
+    return 1
+}
+
 random_password() {
+    local method="${1:-}"
+
+    case "$method" in
+    2022-blake3-aes-128-gcm)
+        random_base64_bytes 16 && return 0
+        ;;
+    2022-blake3-aes-256-gcm|2022-blake3-chacha20-poly1305)
+        random_base64_bytes 32 && return 0
+        ;;
+    esac
+
     if need_cmd openssl; then
         openssl rand -base64 24 | tr -d '\n'
     else
@@ -1209,8 +1233,11 @@ commit_new_node() {
     created="$(date '+%Y-%m-%d %H:%M:%S')"
 
     if [[ "$protocol" == "ss" ]]; then
-        method="chacha20-ietf-poly1305"
-        password="$(random_password)"
+        method="2022-blake3-aes-256-gcm"
+        password="$(random_password "$method")" || {
+            log_e "生成 Shadowsocks 密码失败，请确认系统已安装 openssl 或 base64。"
+            return 1
+        }
     else
         uuid="$(random_uuid)"
     fi
@@ -1434,6 +1461,90 @@ show_runtime_info() {
     echo
 }
 
+migrate_ss_nodes() {
+    init_store
+
+    if [[ ! -s "$NODES_FILE" ]]; then
+        log_w "没有可迁移的节点。"
+        return 0
+    fi
+
+    local new_method="2022-blake3-aes-256-gcm"
+    local old_count
+    old_count="$(awk -F'|' -v m="$new_method" '$2 == "ss" && $6 != m { c++ } END { print c+0 }' "$NODES_FILE")"
+
+    if [[ "$old_count" -eq 0 ]]; then
+        log_i "所有 Shadowsocks 节点已使用 ${new_method} 加密，无需迁移。"
+        return 0
+    fi
+
+    echo "检测到 ${old_count} 个节点使用旧加密方式，迁移后将自动生成新密码。"
+    echo -e "${yellow}客户端需凭新密码重新连接。${plain}"
+    read -r -p "确认迁移？[y/N]: " confirm
+    confirm="$(sanitize_field "$confirm")"
+    case "$confirm" in
+    y | Y | yes | YES | Yes) ;;
+    *)
+        log_w "已取消迁移。"
+        return 0
+        ;;
+    esac
+
+    ensure_proxy_binary
+
+    local tmp_nodes tmp_config raw_line migrated=0
+    tmp_nodes="$(mktemp)"
+    tmp_config="$(make_tmp_config)"
+
+    while IFS= read -r raw_line; do
+        if [[ -z "$raw_line" || "${raw_line:0:1}" == "#" ]]; then
+            printf '%s\n' "$raw_line" >>"$tmp_nodes"
+            continue
+        fi
+
+        local node_id protocol remark listen port method password uuid created entry_host
+        IFS='|' read -r node_id protocol remark listen port method password uuid created entry_host <<<"$raw_line"
+
+        if [[ "$protocol" == "ss" && "$method" != "$new_method" ]]; then
+            local new_password
+            new_password="$(random_password "$new_method")" || {
+                log_e "生成新密码失败，迁移中止。"
+                rm -f "$tmp_nodes"
+                cleanup_tmp_config "$tmp_config"
+                return 1
+            }
+            printf '%s|%s|%s|%s|%s|%s|%s|%s|%s|%s\n' \
+                "$node_id" "$protocol" "$remark" "$listen" "$port" \
+                "$new_method" "$new_password" "$uuid" "$created" "$entry_host" >>"$tmp_nodes"
+            migrated=$((migrated + 1))
+        else
+            printf '%s\n' "$raw_line" >>"$tmp_nodes"
+        fi
+    done <"$NODES_FILE"
+
+    render_config_from_nodes "$tmp_nodes" "$tmp_config"
+    if ! validate_config "$tmp_config"; then
+        rm -f "$tmp_nodes"
+        cleanup_tmp_config "$tmp_config"
+        log_e "迁移后的配置未通过校验，已放弃写入。"
+        return 1
+    fi
+
+    mv "$tmp_config" "$CONFIG_FILE"
+    cleanup_tmp_config "$tmp_config"
+    mv "$tmp_nodes" "$NODES_FILE"
+    chmod 600 "$NODES_FILE" "$CONFIG_FILE"
+
+    install_service || return 1
+    if ! restart_service; then
+        log_e "服务重启失败，请检查系统日志。"
+        return 1
+    fi
+
+    log_i "已成功迁移 ${migrated} 个节点到 ${new_method}，以下为更新后的节点信息："
+    list_nodes
+}
+
 menu() {
     need_root
     init_store
@@ -1446,11 +1557,12 @@ menu() {
         echo "2. 创建 VLESS + TCP 节点"
         echo "3. 查看已创建节点信息"
         echo "4. 删除节点"
-        echo "5. 更新面板"
-        echo "6. 一键卸载"
+        echo "5. 迁移 SS 节点到 2022-blake3-aes-256-gcm"
+        echo "6. 更新面板"
+        echo "7. 一键卸载"
         echo "0. 退出"
         echo
-        read -r -p "请选择功能 [0-6]: " choice
+        read -r -p "请选择功能 [0-7]: " choice
         case "$choice" in
         1)
             create_node "ss" || log_e "创建 Shadowsocks 节点失败。"
@@ -1469,10 +1581,14 @@ menu() {
             pause
             ;;
         5)
-            update_panel || log_e "更新面板失败。"
+            migrate_ss_nodes || log_e "迁移节点失败。"
             pause
             ;;
         6)
+            update_panel || log_e "更新面板失败。"
+            pause
+            ;;
+        7)
             uninstall_panel || log_e "一键卸载失败。"
             pause
             ;;
@@ -1480,7 +1596,7 @@ menu() {
             exit 0
             ;;
         *)
-            log_w "请输入 0-6。"
+            log_w "请输入 0-7。"
             sleep 1
             ;;
         esac
