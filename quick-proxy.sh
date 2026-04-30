@@ -1482,6 +1482,9 @@ show_runtime_info() {
 }
 
 migrate_ss_nodes() {
+    local old_method="${1:-chacha20-ietf-poly1305}"
+    local new_method="${2:-2022-blake3-aes-256-gcm}"
+
     init_store
 
     if [[ ! -s "$NODES_FILE" ]]; then
@@ -1489,8 +1492,11 @@ migrate_ss_nodes() {
         return 0
     fi
 
-    local old_method="chacha20-ietf-poly1305"
-    local new_method="2022-blake3-aes-256-gcm"
+    if [[ "$old_method" == "$new_method" ]]; then
+        log_w "源加密方式与目标加密方式相同，无需迁移。"
+        return 0
+    fi
+
     local old_count
     old_count="$(awk -F'|' -v old="$old_method" '$2 == "ss" && $6 == old { c++ } END { print c+0 }' "$NODES_FILE")"
 
@@ -1579,11 +1585,12 @@ menu() {
         echo "3. 查看已创建节点信息"
         echo "4. 删除节点"
         echo "5. 迁移 chacha20-ietf-poly1305 到 2022-blake3-aes-256-gcm"
-        echo "6. 更新面板"
-        echo "7. 一键卸载"
+        echo "6. 迁移 2022-blake3-aes-256-gcm 到 chacha20-ietf-poly1305"
+        echo "7. 更新面板"
+        echo "8. 一键卸载"
         echo "0. 退出"
         echo
-        read -r -p "请选择功能 [0-7]: " choice
+        read -r -p "请选择功能 [0-8]: " choice
         case "$choice" in
         1)
             create_node "ss" || log_e "创建 Shadowsocks 节点失败。"
@@ -1602,14 +1609,18 @@ menu() {
             pause
             ;;
         5)
-            migrate_ss_nodes || log_e "迁移节点失败。"
+            migrate_ss_nodes "chacha20-ietf-poly1305" "2022-blake3-aes-256-gcm" || log_e "迁移节点失败。"
             pause
             ;;
         6)
-            update_panel || log_e "更新面板失败。"
+            migrate_ss_nodes "2022-blake3-aes-256-gcm" "chacha20-ietf-poly1305" || log_e "迁移节点失败。"
             pause
             ;;
         7)
+            update_panel || log_e "更新面板失败。"
+            pause
+            ;;
+        8)
             uninstall_panel || log_e "一键卸载失败。"
             pause
             ;;
@@ -1617,7 +1628,7 @@ menu() {
             exit 0
             ;;
         *)
-            log_w "请输入 0-7。"
+            log_w "请输入 0-8。"
             sleep 1
             ;;
         esac
