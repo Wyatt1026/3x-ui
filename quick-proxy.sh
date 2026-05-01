@@ -1299,7 +1299,7 @@ stop_proxy_service() {
 }
 
 show_service_logs() {
-    local backend lines log_file found_log=0 log_pattern
+    local backend lines log_file found_log=0 found_entry=0 log_pattern tmp_log
     backend="$(service_backend)"
     log_pattern="$(service_log_pattern)"
 
@@ -1323,21 +1323,37 @@ show_service_logs() {
     openrc)
         if [[ -r "$SERVICE_LOG_FILE" ]]; then
             echo "日志文件: ${SERVICE_LOG_FILE}"
-            tail -n "$lines" "$SERVICE_LOG_FILE"
-            return 0
+            if [[ -s "$SERVICE_LOG_FILE" ]]; then
+                tail -n "$lines" "$SERVICE_LOG_FILE"
+                return 0
+            fi
+            log_w "日志文件为空，当前 ${PROXY_NAME} 可能还没有输出运行日志。"
+        else
+            log_w "未找到专用日志文件 ${SERVICE_LOG_FILE}。"
         fi
 
-        log_w "未找到专用日志文件 ${SERVICE_LOG_FILE}，将从系统日志中过滤当前服务相关内容。"
+        log_w "将从系统日志中过滤当前服务相关内容。"
         for log_file in /var/log/messages /var/log/syslog /var/log/daemon.log; do
             [[ -r "$log_file" ]] || continue
             found_log=1
-            echo "日志文件: ${log_file}"
-            grep -Ei "$log_pattern" "$log_file" | tail -n "$lines" || true
+            tmp_log="$(mktemp)"
+            if grep -Ei "$log_pattern" "$log_file" | tail -n "$lines" >"$tmp_log"; then
+                if [[ -s "$tmp_log" ]]; then
+                    found_entry=1
+                    echo "日志文件: ${log_file}"
+                    cat "$tmp_log"
+                fi
+            fi
+            rm -f "$tmp_log"
         done
 
         if [[ "$found_log" -eq 0 ]]; then
-            log_w "未找到可读日志文件。可尝试执行: rc-service ${SERVICE_NAME} status"
+            log_w "未找到可读系统日志文件。"
+        elif [[ "$found_entry" -eq 0 ]]; then
+            log_w "系统日志中也没有找到 ${SERVICE_NAME} 相关内容。"
         fi
+        echo "当前服务状态: $(format_service_status)"
+        rc-service "$SERVICE_NAME" status 2>/dev/null || true
         ;;
     *)
         log_e "未检测到 systemd 或 OpenRC，无法查看服务日志。"
