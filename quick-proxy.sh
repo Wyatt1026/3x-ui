@@ -1121,6 +1121,20 @@ format_service_status() {
     esac
 }
 
+service_log_pattern() {
+    case "${PROXY_CORE:-}" in
+    singbox)
+        printf '%s' "${SERVICE_NAME}|sing-box|singbox"
+        ;;
+    xray)
+        printf '%s' "${SERVICE_NAME}|(^|[^[:alnum:]_-])xray([^[:alnum:]_-]|$)"
+        ;;
+    *)
+        printf '%s' "${SERVICE_NAME}"
+        ;;
+    esac
+}
+
 start_proxy_service() {
     init_store
 
@@ -1174,8 +1188,9 @@ stop_proxy_service() {
 }
 
 show_service_logs() {
-    local backend lines log_file found_log=0
+    local backend lines log_file found_log=0 log_pattern
     backend="$(service_backend)"
+    log_pattern="$(service_log_pattern)"
 
     read -r -p "请输入显示日志行数，默认 100: " lines
     lines="$(sanitize_field "$lines")"
@@ -1201,11 +1216,12 @@ show_service_logs() {
             return 0
         fi
 
+        log_w "未找到专用日志文件 ${SERVICE_LOG_FILE}，将从系统日志中过滤当前服务相关内容。"
         for log_file in /var/log/messages /var/log/syslog /var/log/daemon.log; do
             [[ -r "$log_file" ]] || continue
             found_log=1
             echo "日志文件: ${log_file}"
-            grep -Ei "${SERVICE_NAME}|${PROXY_NAME}|sing-box|xray" "$log_file" | tail -n "$lines" || true
+            grep -Ei "$log_pattern" "$log_file" | tail -n "$lines" || true
         done
 
         if [[ "$found_log" -eq 0 ]]; then
