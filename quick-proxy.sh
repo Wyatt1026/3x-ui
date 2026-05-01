@@ -29,6 +29,7 @@ SINGBOX_RELEASE_API="https://api.github.com/repos/SagerNet/sing-box/releases/lat
 SINGBOX_RELEASE_BASE="https://github.com/SagerNet/sing-box/releases/download"
 OFFICIAL_XRAY_SYSTEMD_SERVICE="/etc/systemd/system/xray.service"
 OFFICIAL_XRAY_OPENRC_SERVICE="/etc/init.d/xray"
+SERVICE_LOG_FILE="/var/log/${SERVICE_NAME}.log"
 MAX_NODES="${XRAY_NODE_MAX_NODES:-200}"
 PROXY_CORE=""
 PROXY_NAME="Xray"
@@ -1011,6 +1012,8 @@ command="${PROXY_BIN}"
 command_args="${exec_args}"
 command_background=true
 pidfile="/run/${SERVICE_NAME}.pid"
+output_log="${SERVICE_LOG_FILE}"
+error_log="${SERVICE_LOG_FILE}"
 
 depend() {
     need net
@@ -1021,6 +1024,23 @@ EOF
         ;;
     *)
         log_e "未检测到 systemd 或 OpenRC，无法创建后台服务。"
+        return 1
+        ;;
+    esac
+}
+
+start_service() {
+    local backend
+    backend="$(service_backend)"
+
+    case "$backend" in
+    systemd)
+        systemctl start "$SERVICE_NAME"
+        ;;
+    openrc)
+        rc-service "$SERVICE_NAME" start
+        ;;
+    *)
         return 1
         ;;
     esac
@@ -1078,6 +1098,123 @@ service_status() {
         ;;
     *)
         echo "unknown"
+        ;;
+    esac
+}
+
+format_service_status() {
+    local status="${1:-$(service_status)}"
+
+    case "$status" in
+    running)
+        printf '%b运行中%b' "$green" "$plain"
+        ;;
+    "not running")
+        printf '%b已停止%b' "$red" "$plain"
+        ;;
+    unknown)
+        printf '%b未知%b' "$yellow" "$plain"
+        ;;
+    *)
+        printf '%s' "$status"
+        ;;
+    esac
+}
+
+start_proxy_service() {
+    init_store
+
+    if [[ ! -s "$CONFIG_FILE" ]]; then
+        log_w "未找到配置文件，请先创建节点。"
+        return 0
+    fi
+
+    if (( $(node_count_file "$NODES_FILE") == 0 )); then
+        log_w "当前没有节点，服务无需启动。"
+        return 0
+    fi
+
+    ensure_proxy_binary
+
+    if ! validate_config "$CONFIG_FILE"; then
+        log_e "当前 ${PROXY_NAME} 配置未通过校验，未启动服务。"
+        return 1
+    fi
+
+    install_service || return 1
+
+    if start_service; then
+        log_i "服务已启动。"
+        echo "服务状态: $(format_service_status)"
+        return 0
+    fi
+
+    log_e "服务启动失败，请通过菜单查看服务日志。"
+    return 1
+}
+
+stop_proxy_service() {
+    local backend status
+    backend="$(service_backend)"
+
+    if [[ "$backend" == "none" ]]; then
+        log_e "未检测到 systemd 或 OpenRC，无法关闭后台服务。"
+        return 1
+    fi
+
+    stop_service
+    status="$(service_status)"
+    if [[ "$status" == "running" ]]; then
+        log_e "服务关闭失败，请通过菜单查看服务日志。"
+        return 1
+    fi
+
+    log_i "服务已关闭。"
+    echo "服务状态: $(format_service_status "$status")"
+}
+
+show_service_logs() {
+    local backend lines log_file found_log=0
+    backend="$(service_backend)"
+
+    read -r -p "请输入显示日志行数，默认 100: " lines
+    lines="$(sanitize_field "$lines")"
+    if [[ -z "$lines" ]]; then
+        lines=100
+    elif ! [[ "$lines" =~ ^[0-9]+$ ]] || (( lines < 1 )); then
+        log_w "日志行数无效，已使用默认 100 行。"
+        lines=100
+    fi
+
+    case "$backend" in
+    systemd)
+        if ! need_cmd journalctl; then
+            log_e "未找到 journalctl，无法查看 systemd 日志。"
+            return 1
+        fi
+        journalctl -u "$SERVICE_NAME" -n "$lines" --no-pager -o short-iso
+        ;;
+    openrc)
+        if [[ -r "$SERVICE_LOG_FILE" ]]; then
+            echo "日志文件: ${SERVICE_LOG_FILE}"
+            tail -n "$lines" "$SERVICE_LOG_FILE"
+            return 0
+        fi
+
+        for log_file in /var/log/messages /var/log/syslog /var/log/daemon.log; do
+            [[ -r "$log_file" ]] || continue
+            found_log=1
+            echo "日志文件: ${log_file}"
+            grep -Ei "${SERVICE_NAME}|${PROXY_NAME}|sing-box|xray" "$log_file" | tail -n "$lines" || true
+        done
+
+        if [[ "$found_log" -eq 0 ]]; then
+            log_w "未找到可读日志文件。可尝试执行: rc-service ${SERVICE_NAME} status"
+        fi
+        ;;
+    *)
+        log_e "未检测到 systemd 或 OpenRC，无法查看服务日志。"
+        return 1
         ;;
     esac
 }
@@ -1173,7 +1310,7 @@ list_nodes() {
         print_node_line "$node_id" "$protocol" "$remark" "$listen" "$port" "$method" "$password" "$uuid" "$created" "$entry_host"
     done <"$NODES_FILE"
     echo -e "${blue}--------------------------------------------------${plain}"
-    echo "服务状态: $(service_status)"
+    echo "服务状态: $(format_service_status)"
 }
 
 ask_remark_and_port() {
@@ -1463,7 +1600,7 @@ show_runtime_info() {
     echo "当前核心: ${PROXY_NAME}"
     echo "配置目录: ${CONFIG_DIR}"
     echo "节点数量: $(awk -F'|' 'NF >= 5 { c++ } END { print c + 0 }' "$NODES_FILE" 2>/dev/null || echo 0)"
-    echo "服务状态: $(service_status)"
+    echo "服务状态: $(format_service_status)"
     version_bin="$PROXY_BIN"
     if [[ ! -x "$version_bin" ]]; then
         case "$PROXY_CORE" in
@@ -1586,11 +1723,14 @@ menu() {
         echo "4. 删除节点"
         echo "5. 迁移 chacha20-ietf-poly1305 到 2022-blake3-aes-256-gcm"
         echo "6. 迁移 2022-blake3-aes-256-gcm 到 chacha20-ietf-poly1305"
-        echo "7. 更新面板"
-        echo "8. 一键卸载"
+        echo "7. 启动服务"
+        echo "8. 关闭服务"
+        echo "9. 查看服务日志"
+        echo "10. 更新面板"
+        echo "11. 一键卸载"
         echo "0. 退出"
         echo
-        read -r -p "请选择功能 [0-8]: " choice
+        read -r -p "请选择功能 [0-11]: " choice
         case "$choice" in
         1)
             create_node "ss" || log_e "创建 Shadowsocks 节点失败。"
@@ -1617,10 +1757,22 @@ menu() {
             pause
             ;;
         7)
-            update_panel || log_e "更新面板失败。"
+            start_proxy_service || log_e "启动服务失败。"
             pause
             ;;
         8)
+            stop_proxy_service || log_e "关闭服务失败。"
+            pause
+            ;;
+        9)
+            show_service_logs || log_e "查看服务日志失败。"
+            pause
+            ;;
+        10)
+            update_panel || log_e "更新面板失败。"
+            pause
+            ;;
+        11)
             uninstall_panel || log_e "一键卸载失败。"
             pause
             ;;
@@ -1628,7 +1780,7 @@ menu() {
             exit 0
             ;;
         *)
-            log_w "请输入 0-8。"
+            log_w "请输入 0-11。"
             sleep 1
             ;;
         esac
