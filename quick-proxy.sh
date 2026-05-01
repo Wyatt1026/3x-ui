@@ -8,13 +8,15 @@ yellow='\033[0;33m'
 blue='\033[0;34m'
 plain='\033[0m'
 
-APP_NAME="xray-node-manager"
+LEGACY_APP_NAME="xray-node-manager"
+APP_NAME="quick-proxy"
 SCRIPT_VERSION="2026.04.29.7"
 DEFAULT_PROXY_CORE="singbox"
 XRAY_BIN_DEFAULT="/usr/local/bin/xray"
 SINGBOX_BIN_DEFAULT="/usr/local/bin/sing-box"
 SINGBOX_INSTALL_DIR="/usr/local/lib/sing-box"
 CONFIG_DIR="/usr/local/etc/${APP_NAME}"
+LEGACY_CONFIG_DIR="/usr/local/etc/${LEGACY_APP_NAME}"
 CONFIG_FILE="${CONFIG_DIR}/config.json"
 NODES_FILE="${CONFIG_DIR}/nodes.db"
 HOST_FILE="${CONFIG_DIR}/host"
@@ -23,6 +25,8 @@ QUICK_PROXY_CMD="/usr/local/bin/quick-proxy"
 SERVICE_NAME="${APP_NAME}"
 SYSTEMD_SERVICE="/etc/systemd/system/${SERVICE_NAME}.service"
 OPENRC_SERVICE="/etc/init.d/${SERVICE_NAME}"
+LEGACY_SYSTEMD_SERVICE="/etc/systemd/system/${LEGACY_APP_NAME}.service"
+LEGACY_OPENRC_SERVICE="/etc/init.d/${LEGACY_APP_NAME}"
 SCRIPT_SOURCE_URL="https://raw.githubusercontent.com/Wyatt1026/3x-ui/main/quick-proxy.sh"
 OFFICIAL_XRAY_LATEST="https://github.com/XTLS/Xray-core/releases/latest/download"
 SINGBOX_RELEASE_API="https://api.github.com/repos/SagerNet/sing-box/releases/latest"
@@ -30,6 +34,7 @@ SINGBOX_RELEASE_BASE="https://github.com/SagerNet/sing-box/releases/download"
 OFFICIAL_XRAY_SYSTEMD_SERVICE="/etc/systemd/system/xray.service"
 OFFICIAL_XRAY_OPENRC_SERVICE="/etc/init.d/xray"
 SERVICE_LOG_FILE="/var/log/${SERVICE_NAME}.log"
+LEGACY_SERVICE_LOG_FILE="/var/log/${LEGACY_APP_NAME}.log"
 MAX_NODES="${XRAY_NODE_MAX_NODES:-200}"
 PROXY_CORE=""
 PROXY_NAME="Xray"
@@ -129,7 +134,42 @@ install_quick_proxy_command() {
     return 1
 }
 
+migrate_legacy_store() {
+    local name legacy_path target_path
+
+    [[ "$CONFIG_DIR" != "$LEGACY_CONFIG_DIR" ]] || return 0
+    [[ -d "$LEGACY_CONFIG_DIR" ]] || return 0
+
+    if [[ ! -e "$CONFIG_DIR" ]]; then
+        mkdir -p "$(dirname "$CONFIG_DIR")"
+        if mv "$LEGACY_CONFIG_DIR" "$CONFIG_DIR"; then
+            log_i "已迁移配置目录: ${LEGACY_CONFIG_DIR} -> ${CONFIG_DIR}"
+        fi
+        return 0
+    fi
+
+    mkdir -p "$CONFIG_DIR"
+    for name in config.json nodes.db host core; do
+        legacy_path="${LEGACY_CONFIG_DIR}/${name}"
+        target_path="${CONFIG_DIR}/${name}"
+        [[ -e "$legacy_path" ]] || continue
+        if [[ ! -e "$target_path" || ( ! -s "$target_path" && -s "$legacy_path" ) ]]; then
+            mv -f "$legacy_path" "$target_path"
+        fi
+    done
+    rmdir "$LEGACY_CONFIG_DIR" 2>/dev/null || true
+}
+
+migrate_legacy_log_file() {
+    [[ "$SERVICE_LOG_FILE" != "$LEGACY_SERVICE_LOG_FILE" ]] || return 0
+    [[ -f "$LEGACY_SERVICE_LOG_FILE" ]] || return 0
+    [[ -e "$SERVICE_LOG_FILE" ]] && return 0
+    mv "$LEGACY_SERVICE_LOG_FILE" "$SERVICE_LOG_FILE" 2>/dev/null || true
+}
+
 init_store() {
+    migrate_legacy_store
+    migrate_legacy_log_file
     mkdir -p "$CONFIG_DIR"
     touch "$NODES_FILE"
     chmod 700 "$CONFIG_DIR"
@@ -973,11 +1013,77 @@ service_backend() {
     fi
 }
 
+legacy_service_running() {
+    local backend="$1"
+
+    [[ "$SERVICE_NAME" != "$LEGACY_APP_NAME" ]] || return 1
+    case "$backend" in
+    systemd)
+        systemctl is-active --quiet "$LEGACY_APP_NAME"
+        ;;
+    openrc)
+        rc-service "$LEGACY_APP_NAME" status 2>/dev/null | grep -q "status: started"
+        ;;
+    *)
+        return 1
+        ;;
+    esac
+}
+
+remove_legacy_service() {
+    local backend="${1:-$(service_backend)}"
+
+    [[ "$SERVICE_NAME" != "$LEGACY_APP_NAME" ]] || return 0
+    case "$backend" in
+    systemd)
+        systemctl disable --now "$LEGACY_APP_NAME" >/dev/null 2>&1 || true
+        rm -f "$LEGACY_SYSTEMD_SERVICE"
+        systemctl daemon-reload >/dev/null 2>&1 || true
+        ;;
+    openrc)
+        rc-service "$LEGACY_APP_NAME" stop >/dev/null 2>&1 || true
+        rc-update del "$LEGACY_APP_NAME" default >/dev/null 2>&1 || true
+        rm -f "$LEGACY_OPENRC_SERVICE"
+        ;;
+    esac
+}
+
+migrate_legacy_service_if_needed() {
+    local backend has_legacy=0 was_running=0
+
+    [[ "$SERVICE_NAME" != "$LEGACY_APP_NAME" ]] || return 0
+    backend="$(service_backend)"
+    case "$backend" in
+    systemd)
+        [[ -f "$LEGACY_SYSTEMD_SERVICE" ]] && has_legacy=1
+        ;;
+    openrc)
+        [[ -f "$LEGACY_OPENRC_SERVICE" ]] && has_legacy=1
+        ;;
+    esac
+    [[ "$has_legacy" -eq 1 ]] || return 0
+
+    if legacy_service_running "$backend"; then
+        was_running=1
+    fi
+    remove_legacy_service "$backend"
+    log_i "已移除旧服务名: ${LEGACY_APP_NAME}"
+
+    if [[ "$was_running" -eq 1 && -s "$CONFIG_FILE" ]] && (( $(node_count_file "$NODES_FILE") > 0 )); then
+        if install_service && start_service; then
+            log_i "已迁移并启动新服务: ${SERVICE_NAME}"
+        else
+            log_w "旧服务已移除，但新服务启动失败，请通过菜单查看服务日志。"
+        fi
+    fi
+}
+
 install_service() {
     local backend exec_args
     backend="$(service_backend)"
     choose_core_if_needed
     exec_args="$(proxy_run_args)"
+    remove_legacy_service "$backend"
 
     case "$backend" in
     systemd)
@@ -1075,6 +1181,7 @@ stop_service() {
         rc-service "$SERVICE_NAME" stop >/dev/null 2>&1 || true
         ;;
     esac
+    remove_legacy_service "$backend"
 }
 
 service_status() {
@@ -1085,12 +1192,16 @@ service_status() {
     systemd)
         if systemctl is-active --quiet "$SERVICE_NAME"; then
             echo "running"
+        elif legacy_service_running "$backend"; then
+            echo "running"
         else
             echo "not running"
         fi
         ;;
     openrc)
         if rc-service "$SERVICE_NAME" status 2>/dev/null | grep -q "status: started"; then
+            echo "running"
+        elif legacy_service_running "$backend"; then
             echo "running"
         else
             echo "not running"
@@ -1582,11 +1693,13 @@ uninstall_panel() {
         stop_service
         ;;
     esac
+    remove_legacy_service "$backend"
 
-    rm -rf "$CONFIG_DIR"
+    rm -rf "$CONFIG_DIR" "$LEGACY_CONFIG_DIR"
     rm -rf /usr/local/etc/xray /usr/local/share/xray /var/log/xray
     rm -rf "$SINGBOX_INSTALL_DIR"
     rm -f "$XRAY_BIN_DEFAULT" "$SINGBOX_BIN_DEFAULT" /usr/local/bin/xray.sig
+    rm -f "$SERVICE_LOG_FILE" "$LEGACY_SERVICE_LOG_FILE"
     rm -f "$QUICK_PROXY_CMD"
 
     if [[ -n "$real_script" && -f "$real_script" ]]; then
@@ -1730,6 +1843,7 @@ menu() {
     init_store
     install_quick_proxy_command || true
     choose_core_if_needed
+    migrate_legacy_service_if_needed
     while true; do
         clear 2>/dev/null || true
         show_runtime_info
