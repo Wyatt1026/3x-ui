@@ -148,7 +148,7 @@ func (s *XrayService) GetXrayConfig() (*xray.Config, error) {
 
 				// clear client config for additional parameters
 				for key := range c {
-					if key != "email" && key != "id" && key != "password" && key != "flow" && key != "method" && key != "auth" {
+					if key != "email" && key != "id" && key != "password" && key != "flow" && key != "method" && key != "auth" && key != "reverse" {
 						delete(c, key)
 					}
 					if flow, ok := c["flow"].(string); ok && flow == "xtls-rprx-vision-udp443" {
@@ -265,6 +265,18 @@ func (s *XrayService) StopXray() error {
 // SetToNeedRestart marks that Xray needs to be restarted.
 func (s *XrayService) SetToNeedRestart() {
 	isNeedXrayRestart.Store(true)
+}
+
+// GetXrayAPIPort returns the port the local xray process is listening on
+// for its gRPC HandlerService, or 0 when xray isn't currently running.
+// Exposed for the runtime package's LocalRuntime adapter — runtime can't
+// reach into the package-level `p` directly without a service-package
+// import cycle.
+func (s *XrayService) GetXrayAPIPort() int {
+	if p == nil || !p.IsRunning() {
+		return 0
+	}
+	return p.GetAPIPort()
 }
 
 // IsNeedRestartAndSetFalse checks if restart is needed and resets the flag to false.
