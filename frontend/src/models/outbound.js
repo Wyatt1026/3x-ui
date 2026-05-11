@@ -12,6 +12,7 @@ export const Protocols = {
     Hysteria: "hysteria",
     Socks: "socks",
     HTTP: "http",
+    Loopback: "loopback",
 };
 
 export const SSMethods = {
@@ -1291,7 +1292,6 @@ export class Outbound extends CommonClass {
 
     hasAddressPort() {
         return [
-            Protocols.DNS,
             Protocols.VMess,
             Protocols.VLESS,
             Protocols.Trojan,
@@ -1586,6 +1586,7 @@ Outbound.Settings = class extends CommonClass {
             case Protocols.HTTP: return new Outbound.HttpSettings();
             case Protocols.Wireguard: return new Outbound.WireguardSettings();
             case Protocols.Hysteria: return new Outbound.HysteriaSettings();
+            case Protocols.Loopback: return new Outbound.LoopbackSettings();
             default: return null;
         }
     }
@@ -1603,6 +1604,7 @@ Outbound.Settings = class extends CommonClass {
             case Protocols.HTTP: return Outbound.HttpSettings.fromJson(json);
             case Protocols.Wireguard: return Outbound.WireguardSettings.fromJson(json);
             case Protocols.Hysteria: return Outbound.HysteriaSettings.fromJson(json);
+            case Protocols.Loopback: return Outbound.LoopbackSettings.fromJson(json);
             default: return null;
         }
     }
@@ -1782,6 +1784,23 @@ Outbound.BlackholeSettings = class extends CommonClass {
     }
 };
 
+Outbound.LoopbackSettings = class extends CommonClass {
+    constructor(inboundTag = '') {
+        super();
+        this.inboundTag = inboundTag;
+    }
+
+    static fromJson(json = {}) {
+        return new Outbound.LoopbackSettings(json.inboundTag || '');
+    }
+
+    toJson() {
+        return {
+            inboundTag: this.inboundTag || undefined,
+        };
+    }
+};
+
 Outbound.DNSRule = class extends CommonClass {
     constructor(action = 'direct', qtype = '', domain = '') {
         super();
@@ -1826,15 +1845,17 @@ Outbound.DNSRule = class extends CommonClass {
 
 Outbound.DNSSettings = class extends CommonClass {
     constructor(
-        network = 'udp',
-        address = '',
-        port = 53,
+        rewriteNetwork = '',
+        rewriteAddress = '',
+        rewritePort = 53,
+        userLevel = 0,
         rules = []
     ) {
         super();
-        this.network = network;
-        this.address = address;
-        this.port = port;
+        this.rewriteNetwork = rewriteNetwork;
+        this.rewriteAddress = rewriteAddress;
+        this.rewritePort = rewritePort;
+        this.userLevel = userLevel;
         this.rules = Array.isArray(rules) ? rules.map(rule => rule instanceof Outbound.DNSRule ? rule : Outbound.DNSRule.fromJson(rule)) : [];
     }
 
@@ -1847,25 +1868,25 @@ Outbound.DNSSettings = class extends CommonClass {
     }
 
     static fromJson(json = {}) {
+        // Spec uses rewrite{Network,Address,Port}; older configs used the
+        // bare network/address/port keys — accept both so existing saved
+        // configs keep working after the migration.
         return new Outbound.DNSSettings(
-            json.network,
-            json.address,
-            json.port,
+            json.rewriteNetwork ?? json.network ?? '',
+            json.rewriteAddress ?? json.address ?? '',
+            Number(json.rewritePort ?? json.port ?? 53) || 53,
+            Number(json.userLevel ?? 0) || 0,
             getDNSRulesFromJson(json),
         );
     }
 
     toJson() {
-        const json = {
-            network: this.network,
-            address: this.address,
-            port: this.port,
-        };
-
-        if (this.rules.length > 0) {
-            json.rules = Outbound.DNSRule.toJsonArray(this.rules);
-        }
-
+        const json = {};
+        if (!ObjectUtil.isEmpty(this.rewriteNetwork)) json.rewriteNetwork = this.rewriteNetwork;
+        if (!ObjectUtil.isEmpty(this.rewriteAddress)) json.rewriteAddress = this.rewriteAddress;
+        if (this.rewritePort > 0) json.rewritePort = this.rewritePort;
+        if (this.userLevel > 0) json.userLevel = this.userLevel;
+        if (this.rules.length > 0) json.rules = Outbound.DNSRule.toJsonArray(this.rules);
         return json;
     }
 };
@@ -1905,13 +1926,13 @@ Outbound.VmessSettings = class extends CommonClass {
     }
 };
 Outbound.VLESSSettings = class extends CommonClass {
-    constructor(address, port, id, flow, encryption, reverseTag = '', reverseSniffing = new ReverseSniffing(), testpre = 0, testseed = []) {
+    constructor(address, port, id, flow, encryption = 'none', reverseTag = '', reverseSniffing = new ReverseSniffing(), testpre = 0, testseed = []) {
         super();
         this.address = address;
         this.port = port;
         this.id = id;
         this.flow = flow;
-        this.encryption = encryption;
+        this.encryption = encryption || 'none';
         this.reverseTag = reverseTag;
         this.reverseSniffing = reverseSniffing;
         this.testpre = testpre;
@@ -1945,7 +1966,7 @@ Outbound.VLESSSettings = class extends CommonClass {
             port: this.port,
             id: this.id,
             flow: this.flow,
-            encryption: this.encryption,
+            encryption: this.encryption || 'none',
         };
         if (!ObjectUtil.isEmpty(this.reverseTag)) {
             const reverseSniffing = this.reverseSniffing ? this.reverseSniffing.toJson() : {};

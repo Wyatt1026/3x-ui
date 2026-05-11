@@ -53,14 +53,14 @@ onMounted(() => {
   });
 });
 
-const basePath = window.__X_UI_BASE_PATH__ || '';
+const basePath = window.X_UI_BASE_PATH || '';
 const requestUri = window.location.pathname;
 
-// In production, dist.go injects window.__X_UI_CUR_VER__ at serve time.
+// In production, dist.go injects window.X_UI_CUR_VER at serve time.
 // In dev, Vite serves the HTML directly so the global is missing — fall
 // back to currentVersion from the panel-update API once it answers.
 const displayVersion = computed(
-  () => panelUpdateInfo.value?.currentVersion || window.__X_UI_CUR_VER__ || '?',
+  () => panelUpdateInfo.value?.currentVersion || window.X_UI_CUR_VER || '?',
 );
 
 // Hide/reveal the public IPv4/IPv6 — same pattern as legacy.
@@ -123,18 +123,18 @@ async function openConfig() {
           <a-spin :spinning="loading || !fetched" :delay="200" :tip="loading ? loadingTip : t('loading')" size="large">
             <div v-if="!fetched" class="loading-spacer" />
 
-            <a-row v-else :gutter="[isMobile ? 8 : 16, isMobile ? 0 : 12]">
+            <a-row v-else :gutter="[isMobile ? 8 : 16, 12]">
               <a-col :span="24">
                 <StatusCard :status="status" :is-mobile="isMobile" />
               </a-col>
 
-              <a-col :sm="24" :lg="12">
+              <a-col :xs="24" :lg="12">
                 <XrayStatusCard :status="status" :is-mobile="isMobile" :ip-limit-enable="ipLimitEnable"
                   @stop-xray="stopXray" @restart-xray="restartXray" @open-xray-logs="openXrayLogs"
                   @open-logs="logsOpen = true" @open-version-switch="openVersionSwitch" />
               </a-col>
 
-              <a-col :sm="24" :lg="12">
+              <a-col :xs="24" :lg="12">
                 <a-card :title="t('menu.link')" hoverable>
                   <template #actions>
                     <a-space class="action" @click="logsOpen = true">
@@ -153,7 +153,7 @@ async function openConfig() {
                 </a-card>
               </a-col>
 
-              <a-col :sm="24" :lg="12">
+              <a-col :xs="24" :lg="12">
                 <a-card title="3X-UI" hoverable>
                   <template v-if="panelUpdateInfo.updateAvailable" #extra>
                     <a-tooltip :title="`${t('pages.index.updatePanel')}: ${panelUpdateInfo.latestVersion}`">
@@ -164,23 +164,21 @@ async function openConfig() {
                       </a-tag>
                     </a-tooltip>
                   </template>
-                  <a href="https://github.com/MHSanaei/3x-ui/releases" target="_blank" rel="noopener noreferrer">
-                    <a-tag color="green">v{{ displayVersion }}</a-tag>
-                  </a>
-                  <a href="https://t.me/XrayUI" target="_blank" rel="noopener noreferrer">
-                    <a-tag color="green">@XrayUI</a-tag>
-                  </a>
-                  <a href="https://github.com/MHSanaei/3x-ui/wiki" target="_blank" rel="noopener noreferrer">
-                    <a-tag color="purple">{{ t('pages.index.documentation') }}</a-tag>
-                  </a>
-                  <a-tag color="blue" class="history-tag" @click="openSystemHistory">
-                    <AreaChartOutlined />
-                    {{ t('pages.index.systemHistoryTitle') }}
-                  </a-tag>
+                  <div class="link-tags">
+                    <a href="https://github.com/MHSanaei/3x-ui/releases" target="_blank" rel="noopener noreferrer">
+                      <a-tag color="green">v{{ displayVersion }}</a-tag>
+                    </a>
+                    <a href="https://t.me/XrayUI" target="_blank" rel="noopener noreferrer">
+                      <a-tag color="green">@XrayUI</a-tag>
+                    </a>
+                    <a href="https://github.com/MHSanaei/3x-ui/wiki" target="_blank" rel="noopener noreferrer">
+                      <a-tag color="purple">{{ t('pages.index.documentation') }}</a-tag>
+                    </a>
+                  </div>
                 </a-card>
               </a-col>
 
-              <a-col :sm="24" :lg="12">
+              <a-col :xs="24" :lg="12">
                 <a-card :title="t('pages.index.operationHours')" hoverable>
                   <a-tag :color="status.xray.color">
                     Xray: {{ TimeFormatter.formatSecond(status.appStats.uptime) }}
@@ -189,8 +187,14 @@ async function openConfig() {
                 </a-card>
               </a-col>
 
-              <a-col :sm="24" :lg="12">
+              <a-col :xs="24" :lg="12">
                 <a-card :title="t('pages.index.systemLoad')" hoverable>
+                  <template #extra>
+                    <a-tag color="blue" class="history-tag" @click="openSystemHistory">
+                      <AreaChartOutlined />
+                      {{ t('pages.index.systemHistoryTitle') }}
+                    </a-tag>
+                  </template>
                   <a-tooltip :title="t('pages.index.systemLoadDesc')">
                     <a-tag color="green">
                       {{ status.loads[0] }} | {{ status.loads[1] }} | {{ status.loads[2] }}
@@ -199,7 +203,7 @@ async function openConfig() {
                 </a-card>
               </a-col>
 
-              <a-col :sm="24" :lg="12">
+              <a-col :xs="24" :lg="12">
                 <a-card :title="t('usage')" hoverable>
                   <a-tag color="green">
                     {{ t('pages.index.memory') }}: {{ SizeFormatter.sizeFormat(status.appStats.mem) }}
@@ -210,7 +214,7 @@ async function openConfig() {
                 </a-card>
               </a-col>
 
-              <a-col :sm="24" :lg="12">
+              <a-col :xs="24" :lg="12">
                 <a-card :title="t('pages.index.overallSpeed')" hoverable>
                   <a-row :gutter="isMobile ? [8, 8] : 0">
                     <a-col :span="12">
@@ -235,7 +239,7 @@ async function openConfig() {
                 </a-card>
               </a-col>
 
-              <a-col :sm="24" :lg="12">
+              <a-col :xs="24" :lg="12">
                 <a-card :title="t('pages.index.totalData')" hoverable>
                   <a-row :gutter="isMobile ? [8, 8] : 0">
                     <a-col :span="12">
@@ -258,7 +262,7 @@ async function openConfig() {
                 </a-card>
               </a-col>
 
-              <a-col :sm="24" :lg="12">
+              <a-col :xs="24" :lg="12">
                 <a-card :title="t('pages.index.ipAddresses')" hoverable>
                   <template #extra>
                     <a-tooltip :title="t('pages.index.toggleIpVisibility')" :placement="isMobile ? 'topRight' : 'top'">
@@ -285,7 +289,7 @@ async function openConfig() {
                 </a-card>
               </a-col>
 
-              <a-col :sm="24" :lg="12">
+              <a-col :xs="24" :lg="12">
                 <a-card :title="t('pages.index.connectionCount')" hoverable>
                   <a-row :gutter="isMobile ? [8, 8] : 0">
                     <a-col :span="12">
@@ -332,8 +336,8 @@ async function openConfig() {
 }
 
 .index-page.is-dark {
-  --bg-page: #0a1222;
-  --bg-card: #151f31;
+  --bg-page: #1e1e1e;
+  --bg-card: #252526;
 }
 
 .index-page.is-dark.is-ultra {
@@ -352,6 +356,13 @@ async function openConfig() {
 
 .content-area {
   padding: 24px;
+}
+
+@media (max-width: 768px) {
+  .content-area {
+    padding: 12px;
+    padding-top: 64px;
+  }
 }
 
 .loading-spacer {
@@ -376,6 +387,21 @@ async function openConfig() {
   display: inline-flex;
   align-items: center;
   gap: 4px;
+  margin-inline-end: 0;
+}
+
+.link-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.link-tags a {
+  display: inline-flex;
+}
+
+.link-tags :deep(.ant-tag) {
+  margin-inline-end: 0;
 }
 
 .ip-toggle-icon {

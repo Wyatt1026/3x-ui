@@ -9,7 +9,7 @@ let sharedClient = null;
 
 function getSharedClient() {
   if (sharedClient) return sharedClient;
-  const basePath = (typeof window !== 'undefined' && window.__X_UI_BASE_PATH__) || '';
+  const basePath = (typeof window !== 'undefined' && window.X_UI_BASE_PATH) || '';
   sharedClient = new WebSocketClient(basePath);
   return sharedClient;
 }
@@ -24,7 +24,7 @@ function getSharedClient() {
 //   useWebSocket({
 //     traffic: (payload) => applyTrafficEvent(payload),
 //     client_stats: (payload) => applyClientStatsEvent(payload),
-//     invalidate: ({ dataType }) => { if (dataType === 'inbounds') refresh(); },
+//     invalidate: ({ type }) => { if (type === 'inbounds') refresh(); },
 //   });
 //
 // Built-in lifecycle events ('connected' / 'disconnected' / 'error')

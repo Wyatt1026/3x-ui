@@ -336,16 +336,16 @@ check_config() {
         echo -e "${yellow}You can get an ACME certificate for your IP address and choose Let's Encrypt or ZeroSSL.${plain}"
         read -rp "Generate SSL certificate for IP now? [y/N]: " gen_ssl
         if [[ "$gen_ssl" == "y" || "$gen_ssl" == "Y" ]]; then
-            stop > /dev/null 2>&1
+            stop 0 > /dev/null 2>&1
             ssl_cert_issue_for_ip
             if [[ $? -eq 0 ]]; then
                 echo -e "${green}Access URL: https://${server_ip}:${existing_port}${existing_webBasePath}${plain}"
                 # ssl_cert_issue_for_ip already restarts the panel, but ensure it's running
-                start > /dev/null 2>&1
+                start 0 > /dev/null 2>&1
             else
                 LOGE "IP certificate setup failed."
                 echo -e "${yellow}You can try again via option 19 (SSL Certificate Management).${plain}"
-                start > /dev/null 2>&1
+                start 0 > /dev/null 2>&1
             fi
         else
             echo -e "${yellow}Access URL: http://${server_ip}:${existing_port}${existing_webBasePath}${plain}"
@@ -436,7 +436,11 @@ restart() {
 }
 
 restart_xray() {
-    systemctl reload x-ui
+    if [[ $release == "alpine" ]]; then
+        rc-service x-ui reload
+    else
+        systemctl reload x-ui
+    fi
     LOGI "xray-core Restart signal sent successfully, Please check the log information to confirm whether xray restarted successfully"
     sleep 2
     show_xray_status
@@ -1129,118 +1133,116 @@ ssl_cert_issue_main() {
 
     read -rp "Choose an option: " choice
     case "$choice" in
-    0)
-        show_menu
-        ;;
-    1)
-        ssl_cert_issue
-        ssl_cert_issue_main
-        ;;
-    2)
-        local domains=$(find /root/cert/ -mindepth 1 -maxdepth 1 -type d -exec basename {} \;)
-        if [ -z "$domains" ]; then
-            echo "No certificates found to revoke."
-        else
-            echo "Existing domains:"
-            echo "$domains"
-            read -rp "Please enter a domain from the list to revoke the certificate: " domain
-            if echo "$domains" | grep -qw "$domain"; then
-                ~/.acme.sh/acme.sh --revoke -d ${domain}
-                LOGI "Certificate revoked for domain: $domain"
+        0)
+            show_menu
+            ;;
+        1)
+            ssl_cert_issue
+            ssl_cert_issue_main
+            ;;
+        2)
+            local domains=$(find /root/cert/ -mindepth 1 -maxdepth 1 -type d -exec basename {} \;)
+            if [ -z "$domains" ]; then
+                echo "No certificates found to revoke."
             else
-                echo "Invalid domain entered."
-            fi
-        fi
-        ssl_cert_issue_main
-        ;;
-    3)
-        local domains=$(find /root/cert/ -mindepth 1 -maxdepth 1 -type d -exec basename {} \;)
-        if [ -z "$domains" ]; then
-            echo "No certificates found to renew."
-        else
-            echo "Existing domains:"
-            echo "$domains"
-            read -rp "Please enter a domain from the list to renew the SSL certificate: " domain
-            if echo "$domains" | grep -qw "$domain"; then
-                ~/.acme.sh/acme.sh --renew -d ${domain} --force
-                LOGI "Certificate forcefully renewed for domain: $domain"
-            else
-                echo "Invalid domain entered."
-            fi
-        fi
-        ssl_cert_issue_main
-        ;;
-    4)
-        local domains=$(find /root/cert/ -mindepth 1 -maxdepth 1 -type d -exec basename {} \;)
-        if [ -z "$domains" ]; then
-            echo "No certificates found."
-        else
-            echo "Existing domains and their paths:"
-            for domain in $domains; do
-                local cert_path="/root/cert/${domain}/fullchain.pem"
-                local key_path="/root/cert/${domain}/privkey.pem"
-                if [[ -f "${cert_path}" && -f "${key_path}" ]]; then
-                    echo -e "Domain: ${domain}"
-                    echo -e "\tCertificate Path: ${cert_path}"
-                    echo -e "\tPrivate Key Path: ${key_path}"
+                echo "Existing domains:"
+                echo "$domains"
+                read -rp "Please enter a domain from the list to revoke the certificate: " domain
+                if echo "$domains" | grep -qw "$domain"; then
+                    ~/.acme.sh/acme.sh --revoke -d ${domain}
+                    LOGI "Certificate revoked for domain: $domain"
                 else
-                    echo -e "Domain: ${domain} - Certificate or Key missing."
+                    echo "Invalid domain entered."
                 fi
-            done
-        fi
-        ssl_cert_issue_main
-        ;;
-    5)
-        local domains=$(find /root/cert/ -mindepth 1 -maxdepth 1 -type d -exec basename {} \;)
-        if [ -z "$domains" ]; then
-            echo "No certificates found."
-        else
-            echo "Available domains:"
-            echo "$domains"
-            read -rp "Please choose a domain to set the panel paths: " domain
-
-            if echo "$domains" | grep -qw "$domain"; then
-                local webCertFile="/root/cert/${domain}/fullchain.pem"
-                local webKeyFile="/root/cert/${domain}/privkey.pem"
-
-                if [[ -f "${webCertFile}" && -f "${webKeyFile}" ]]; then
-                    ${xui_folder}/x-ui cert -webCert "$webCertFile" -webCertKey "$webKeyFile"
-                    echo "Panel paths set for domain: $domain"
-                    echo "  - Certificate File: $webCertFile"
-                    echo "  - Private Key File: $webKeyFile"
-                    restart
-                else
-                    echo "Certificate or private key not found for domain: $domain."
-                fi
-            else
-                echo "Invalid domain entered."
             fi
-        fi
-        ssl_cert_issue_main
-        ;;
-    6)
-        echo -e "${yellow}ACME SSL Certificate for IP Address${plain}"
-        echo -e "This will obtain a certificate for your server's IP using your selected CA."
-        echo -e "${yellow}Let's Encrypt IP certificates use the shortlived profile (~6 days); ZeroSSL uses its standard ACME flow.${plain}"
-        echo -e "${yellow}Port 80 must be open and accessible from the internet.${plain}"
-        confirm "Do you want to proceed?" "y"
-        if [[ $? == 0 ]]; then
-            ssl_cert_issue_for_ip
-        fi
-        ssl_cert_issue_main
-        ;;
+            ssl_cert_issue_main
+            ;;
+        3)
+            local domains=$(find /root/cert/ -mindepth 1 -maxdepth 1 -type d -exec basename {} \;)
+            if [ -z "$domains" ]; then
+                echo "No certificates found to renew."
+            else
+                echo "Existing domains:"
+                echo "$domains"
+                read -rp "Please enter a domain from the list to renew the SSL certificate: " domain
+                if echo "$domains" | grep -qw "$domain"; then
+                    ~/.acme.sh/acme.sh --renew -d ${domain} --force
+                    LOGI "Certificate forcefully renewed for domain: $domain"
+                else
+                    echo "Invalid domain entered."
+                fi
+            fi
+            ssl_cert_issue_main
+            ;;
+        4)
+            local domains=$(find /root/cert/ -mindepth 1 -maxdepth 1 -type d -exec basename {} \;)
+            if [ -z "$domains" ]; then
+                echo "No certificates found."
+            else
+                echo "Existing domains and their paths:"
+                for domain in $domains; do
+                    local cert_path="/root/cert/${domain}/fullchain.pem"
+                    local key_path="/root/cert/${domain}/privkey.pem"
+                    if [[ -f "${cert_path}" && -f "${key_path}" ]]; then
+                        echo -e "Domain: ${domain}"
+                        echo -e "\tCertificate Path: ${cert_path}"
+                        echo -e "\tPrivate Key Path: ${key_path}"
+                    else
+                        echo -e "Domain: ${domain} - Certificate or Key missing."
+                    fi
+                done
+            fi
+            ssl_cert_issue_main
+            ;;
+        5)
+            local domains=$(find /root/cert/ -mindepth 1 -maxdepth 1 -type d -exec basename {} \;)
+            if [ -z "$domains" ]; then
+                echo "No certificates found."
+            else
+                echo "Available domains:"
+                echo "$domains"
+                read -rp "Please choose a domain to set the panel paths: " domain
+                if echo "$domains" | grep -qw "$domain"; then
+                    local webCertFile="/root/cert/${domain}/fullchain.pem"
+                    local webKeyFile="/root/cert/${domain}/privkey.pem"
 
-    *)
-        echo -e "${red}Invalid option. Please select a valid number.${plain}\n"
-        ssl_cert_issue_main
-        ;;
+                    if [[ -f "${webCertFile}" && -f "${webKeyFile}" ]]; then
+                        ${xui_folder}/x-ui cert -webCert "$webCertFile" -webCertKey "$webKeyFile"
+                        echo "Panel paths set for domain: $domain"
+                        echo "  - Certificate File: $webCertFile"
+                        echo "  - Private Key File: $webKeyFile"
+                        restart
+                    else
+                        echo "Certificate or private key not found for domain: $domain."
+                    fi
+                else
+                    echo "Invalid domain entered."
+                fi
+            fi
+            ssl_cert_issue_main
+            ;;
+        6)
+            echo -e "${yellow}ACME SSL Certificate for IP Address${plain}"
+            echo -e "This will obtain a certificate for your server's IP using your selected CA."
+            echo -e "${yellow}Let's Encrypt IP certificates use the shortlived profile (~6 days); ZeroSSL uses its standard ACME flow.${plain}"
+            echo -e "${yellow}Port 80 must be open and accessible from the internet.${plain}"
+            confirm "Do you want to proceed?" "y"
+            if [[ $? == 0 ]]; then
+                ssl_cert_issue_for_ip
+            fi
+            ssl_cert_issue_main
+            ;;
+        *)
+            echo -e "${red}Invalid option. Please select a valid number.${plain}\n"
+            ssl_cert_issue_main
+            ;;
     esac
 }
 
 ssl_cert_issue_for_ip() {
     LOGI "Starting automatic SSL certificate generation for server IP..."
     LOGI "You will be prompted to choose Let's Encrypt or ZeroSSL."
-    
+
     local existing_webBasePath=$(${xui_folder}/x-ui setting -show true | grep -Eo 'webBasePath: .+' | awk '{print $2}')
     local existing_port=$(${xui_folder}/x-ui setting -show true | grep -Eo 'port: .+' | awk '{print $2}')
 
@@ -1371,7 +1373,7 @@ ssl_cert_issue_for_ip() {
 
     # Reload command - restarts panel after renewal
     local reloadCmd="systemctl restart x-ui 2>/dev/null || rc-service x-ui restart 2>/dev/null"
-    
+
     prompt_acme_ca
     ensure_acme_ca_account "${ACME_CA}"
     if [ $? -ne 0 ]; then
@@ -1386,7 +1388,7 @@ ssl_cert_issue_for_ip() {
         cert_validity="~6 days"
     fi
     ~/.acme.sh/acme.sh "${issue_args[@]}"
-    
+
     if [ $? -ne 0 ]; then
         LOGE "Failed to issue certificate for IP: ${server_ip}"
         LOGE "Make sure port ${WebPort} is open and the server is accessible from the internet"
@@ -1523,7 +1525,7 @@ ssl_cert_issue() {
     # detect existing certificate and reuse it if present
     local cert_exists=0
     local reissue_existing=0
-    if ~/.acme.sh/acme.sh --list 2>/dev/null | awk '{print $1}' | grep -Fxq "${domain}"; then
+    if ~/.acme.sh/acme.sh --list 2> /dev/null | awk '{print $1}' | grep -Fxq "${domain}"; then
         cert_exists=1
         local certInfo=$(~/.acme.sh/acme.sh --list 2> /dev/null | grep -F "${domain}")
         LOGI "Existing certificate found for ${domain}, will reuse it."
@@ -2201,10 +2203,10 @@ actionstop = <iptables> -D <chain> -p <protocol> -j f2b-<name>
 actioncheck = <iptables> -n -L <chain> | grep -q 'f2b-<name>[ \t]'
 
 actionban = <iptables> -I f2b-<name> 1 -s <ip> -j <blocktype>
-            echo "\$(date +"%Y/%m/%d %H:%M:%S")   BAN   [Email] = <F-USER> [IP] = <ip> banned for <bantime> seconds." >> ${iplimit_banned_log_path}
+            echo "\$(date +"%%Y/%%m/%%d %%H:%%M:%%S")   BAN   [Email] = <F-USER> [IP] = <ip> banned for <bantime> seconds." >> ${iplimit_banned_log_path}
 
 actionunban = <iptables> -D f2b-<name> -s <ip> -j <blocktype>
-              echo "\$(date +"%Y/%m/%d %H:%M:%S")   UNBAN   [Email] = <F-USER> [IP] = <ip> unbanned." >> ${iplimit_banned_log_path}
+              echo "\$(date +"%%Y/%%m/%%d %%H:%%M:%%S")   UNBAN   [Email] = <F-USER> [IP] = <ip> unbanned." >> ${iplimit_banned_log_path}
 
 [Init]
 name = default

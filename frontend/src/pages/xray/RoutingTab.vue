@@ -65,14 +65,32 @@ const editingRule = ref(null);
 const editingIndex = ref(null);
 
 const inboundTagOptions = computed(() => {
-  const out = new Set();
-  for (const ib of props.templateSettings?.inbounds || []) {
-    if (ib.tag) out.add(ib.tag);
+  const seen = new Set();
+  const out = [];
+
+  function pushUnique(tag) {
+    if (!tag) return;
+    if (seen.has(tag)) return;
+    seen.add(tag);
+    out.push(tag);
   }
-  for (const t of props.inboundTags || []) out.add(t);
-  // dnsTag if DNS is configured.
-  const dt = props.templateSettings?.dns?.tag;
-  if (dt) out.add(dt);
+
+  for (const ib of props.templateSettings?.inbounds || []) {
+    pushUnique(ib.tag);
+  }
+  for (const t of props.inboundTags || []) {
+    pushUnique(t);
+  }
+  for (const ob of props.templateSettings?.outbounds || []) {
+    const rt = ob?.reverse?.tag || ob?.settings?.reverse?.tag || ob?.settings?.inboundTag;
+    pushUnique(rt);
+  }
+  pushUnique(props.templateSettings?.dns?.tag);
+
+  for (const s of props.templateSettings?.dns?.servers || []) {
+    if (typeof s === 'object' && s?.tag) pushUnique(s.tag);
+  }
+
   return [...out];
 });
 
@@ -165,19 +183,14 @@ const columns = computed(() => (props.isMobile ? mobileColumns.value : desktopCo
 <template>
   <a-space direction="vertical" size="middle" :style="{ width: '100%' }">
     <a-button type="primary" @click="openAdd">
-      <template #icon><PlusOutlined /></template>
+      <template #icon>
+        <PlusOutlined />
+      </template>
       {{ t('pages.xray.Routings') }}
     </a-button>
 
-    <a-table
-      :columns="columns"
-      :data-source="rows"
-      :row-key="(r) => r.key"
-      :pagination="false"
-      :scroll="isMobile ? {} : { x: 1000 }"
-      size="small"
-      class="routing-table"
-    >
+    <a-table :columns="columns" :data-source="rows" :row-key="(r) => r.key" :pagination="false"
+      :scroll="isMobile ? {} : { x: 1000 }" size="small" class="routing-table">
       <template #bodyCell="{ column, record, index }">
         <!-- ============== # / actions ============== -->
         <template v-if="column.key === 'action'">
@@ -214,21 +227,24 @@ const columns = computed(() => (props.isMobile ? mobileColumns.value : desktopCo
               <span class="criterion-row">
                 <span class="criterion-label">IP</span>
                 <span class="criterion-value">{{ csv(record.sourceIP)[0] }}</span>
-                <span v-if="csv(record.sourceIP).length > 1" class="criterion-more">+{{ csv(record.sourceIP).length - 1 }}</span>
+                <span v-if="csv(record.sourceIP).length > 1" class="criterion-more">+{{ csv(record.sourceIP).length - 1
+                  }}</span>
               </span>
             </a-tooltip>
             <a-tooltip v-if="record.sourcePort" :title="`Source port: ${record.sourcePort}`">
               <span class="criterion-row">
                 <span class="criterion-label">Port</span>
                 <span class="criterion-value">{{ csv(record.sourcePort)[0] }}</span>
-                <span v-if="csv(record.sourcePort).length > 1" class="criterion-more">+{{ csv(record.sourcePort).length - 1 }}</span>
+                <span v-if="csv(record.sourcePort).length > 1" class="criterion-more">+{{ csv(record.sourcePort).length
+                  - 1 }}</span>
               </span>
             </a-tooltip>
             <a-tooltip v-if="record.vlessRoute" :title="`VLESS route: ${record.vlessRoute}`">
               <span class="criterion-row">
                 <span class="criterion-label">VLESS</span>
                 <span class="criterion-value">{{ csv(record.vlessRoute)[0] }}</span>
-                <span v-if="csv(record.vlessRoute).length > 1" class="criterion-more">+{{ csv(record.vlessRoute).length - 1 }}</span>
+                <span v-if="csv(record.vlessRoute).length > 1" class="criterion-more">+{{ csv(record.vlessRoute).length
+                  - 1 }}</span>
               </span>
             </a-tooltip>
             <span v-if="!record.sourceIP && !record.sourcePort && !record.vlessRoute" class="criterion-empty">—</span>
@@ -242,14 +258,16 @@ const columns = computed(() => (props.isMobile ? mobileColumns.value : desktopCo
               <span class="criterion-row">
                 <span class="criterion-label">L4</span>
                 <span class="criterion-value">{{ csv(record.network)[0] }}</span>
-                <span v-if="csv(record.network).length > 1" class="criterion-more">+{{ csv(record.network).length - 1 }}</span>
+                <span v-if="csv(record.network).length > 1" class="criterion-more">+{{ csv(record.network).length - 1
+                  }}</span>
               </span>
             </a-tooltip>
             <a-tooltip v-if="record.protocol" :title="`Protocol: ${record.protocol}`">
               <span class="criterion-row">
                 <span class="criterion-label">Protocol</span>
                 <span class="criterion-value">{{ csv(record.protocol)[0] }}</span>
-                <span v-if="csv(record.protocol).length > 1" class="criterion-more">+{{ csv(record.protocol).length - 1 }}</span>
+                <span v-if="csv(record.protocol).length > 1" class="criterion-more">+{{ csv(record.protocol).length - 1
+                  }}</span>
               </span>
             </a-tooltip>
             <a-tooltip v-if="record.attrs" :title="`Attrs: ${record.attrs}`">
@@ -276,14 +294,16 @@ const columns = computed(() => (props.isMobile ? mobileColumns.value : desktopCo
               <span class="criterion-row">
                 <span class="criterion-label">Domain</span>
                 <span class="criterion-value">{{ csv(record.domain)[0] }}</span>
-                <span v-if="csv(record.domain).length > 1" class="criterion-more">+{{ csv(record.domain).length - 1 }}</span>
+                <span v-if="csv(record.domain).length > 1" class="criterion-more">+{{ csv(record.domain).length - 1
+                  }}</span>
               </span>
             </a-tooltip>
             <a-tooltip v-if="record.port" :title="`Destination port: ${record.port}`">
               <span class="criterion-row">
                 <span class="criterion-label">Port</span>
                 <span class="criterion-value">{{ csv(record.port)[0] }}</span>
-                <span v-if="csv(record.port).length > 1" class="criterion-more">+{{ csv(record.port).length - 1 }}</span>
+                <span v-if="csv(record.port).length > 1" class="criterion-more">+{{ csv(record.port).length - 1
+                  }}</span>
               </span>
             </a-tooltip>
             <span v-if="!record.ip && !record.domain && !record.port" class="criterion-empty">—</span>
@@ -297,14 +317,16 @@ const columns = computed(() => (props.isMobile ? mobileColumns.value : desktopCo
               <span class="criterion-row">
                 <span class="criterion-label">Tag</span>
                 <span class="criterion-value">{{ csv(record.inboundTag)[0] }}</span>
-                <span v-if="csv(record.inboundTag).length > 1" class="criterion-more">+{{ csv(record.inboundTag).length - 1 }}</span>
+                <span v-if="csv(record.inboundTag).length > 1" class="criterion-more">+{{ csv(record.inboundTag).length
+                  - 1 }}</span>
               </span>
             </a-tooltip>
             <a-tooltip v-if="record.user" :title="`User: ${record.user}`">
               <span class="criterion-row">
                 <span class="criterion-label">User</span>
                 <span class="criterion-value">{{ csv(record.user)[0] }}</span>
-                <span v-if="csv(record.user).length > 1" class="criterion-more">+{{ csv(record.user).length - 1 }}</span>
+                <span v-if="csv(record.user).length > 1" class="criterion-more">+{{ csv(record.user).length - 1
+                  }}</span>
               </span>
             </a-tooltip>
             <span v-if="!record.inboundTag && !record.user" class="criterion-empty">—</span>
@@ -328,14 +350,8 @@ const columns = computed(() => (props.isMobile ? mobileColumns.value : desktopCo
       </template>
     </a-table>
 
-    <RuleFormModal
-      v-model:open="ruleModalOpen"
-      :rule="editingRule"
-      :inbound-tags="inboundTagOptions"
-      :outbound-tags="outboundTagOptions"
-      :balancer-tags="balancerTagOptions"
-      @confirm="onRuleConfirm"
-    />
+    <RuleFormModal v-model:open="ruleModalOpen" :rule="editingRule" :inbound-tags="inboundTagOptions"
+      :outbound-tags="outboundTagOptions" :balancer-tags="balancerTagOptions" @confirm="onRuleConfirm" />
   </a-space>
 </template>
 
@@ -345,6 +361,7 @@ const columns = computed(() => (props.isMobile ? mobileColumns.value : desktopCo
   align-items: center;
   gap: 6px;
 }
+
 .row-index {
   font-weight: 500;
   opacity: 0.7;
@@ -358,30 +375,36 @@ const columns = computed(() => (props.isMobile ? mobileColumns.value : desktopCo
   gap: 2px;
   font-size: 12px;
 }
+
 .criterion-row {
   display: inline-flex;
   align-items: baseline;
   gap: 4px;
   white-space: nowrap;
 }
+
 .criterion-label {
   font-size: 10px;
   text-transform: uppercase;
   opacity: 0.55;
   letter-spacing: 0.04em;
 }
+
 .criterion-value {
   font-weight: 500;
 }
+
 .criterion-more {
   font-size: 11px;
   padding: 0 5px;
   border-radius: 8px;
   background: rgba(0, 0, 0, 0.06);
 }
+
 :global(body.dark) .criterion-more {
   background: rgba(255, 255, 255, 0.1);
 }
+
 .criterion-empty {
   opacity: 0.4;
 }
@@ -391,15 +414,19 @@ const columns = computed(() => (props.isMobile ? mobileColumns.value : desktopCo
   flex-direction: column;
   gap: 2px;
 }
+
 .target-row {
   display: flex;
   align-items: center;
   gap: 4px;
 }
+
 .target-icon {
   font-size: 12px;
   opacity: 0.6;
 }
 
-.danger { color: #ff4d4f; }
+.danger {
+  color: #ff4d4f;
+}
 </style>

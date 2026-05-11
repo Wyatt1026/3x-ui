@@ -199,6 +199,7 @@ const isBlackhole = computed(() => proto.value === Protocols.Blackhole);
 const isDNS = computed(() => proto.value === Protocols.DNS);
 const isWireguard = computed(() => proto.value === Protocols.Wireguard);
 const isHysteria = computed(() => proto.value === Protocols.Hysteria);
+const isLoopback = computed(() => proto.value === Protocols.Loopback);
 
 function regenerateWgKeys() {
   if (!outbound.value?.settings) return;
@@ -266,21 +267,23 @@ function regenerateWgKeys() {
 
             <a-form-item label="Noises">
               <a-switch :checked="(outbound.settings.noises || []).length > 0"
-                @change="(checked) => outbound.settings.noises = checked ? [{ type: 'rand', packet: '10-20', delay: '10-16', applyTo: 'ip' }] : []" />
+                @change="(checked) => outbound.settings.noises = checked ? [new Outbound.FreedomSettings.Noise()] : []" />
               <a-button v-if="outbound.settings.noises && outbound.settings.noises.length > 0" size="small"
                 type="primary" class="ml-8"
-                @click="outbound.settings.noises.push({ type: 'rand', packet: '10-20', delay: '10-16', applyTo: 'ip' })">
+                @click="outbound.settings.noises.push(new Outbound.FreedomSettings.Noise())">
                 <template #icon>
                   <PlusOutlined />
                 </template>
               </a-button>
             </a-form-item>
             <template v-for="(noise, index) in outbound.settings.noises || []" :key="index">
-              <div class="item-heading">
-                <span>Noise {{ index + 1 }}</span>
-                <DeleteOutlined v-if="outbound.settings.noises.length > 1" class="danger-icon"
-                  @click="outbound.settings.noises.splice(index, 1)" />
-              </div>
+              <a-form-item :wrapper-col="{ md: { span: 14, offset: 8 } }" :colon="false">
+                <div class="item-heading">
+                  <span>Noise {{ index + 1 }}</span>
+                  <DeleteOutlined v-if="outbound.settings.noises.length > 1" class="danger-icon"
+                    @click="outbound.settings.noises.splice(index, 1)" />
+                </div>
+              </a-form-item>
               <a-form-item label="Type">
                 <a-select v-model:value="noise.type">
                   <a-select-option v-for="x in ['rand', 'base64', 'str', 'hex']" :key="x" :value="x">{{ x
@@ -311,26 +314,45 @@ function regenerateWgKeys() {
             </a-form-item>
           </template>
 
+          <!-- ============== Loopback ============== -->
+          <template v-if="isLoopback">
+            <a-form-item label="Inbound tag">
+              <a-input v-model:value="outbound.settings.inboundTag"
+                placeholder="inbound tag using in routing rules" />
+            </a-form-item>
+          </template>
+
           <!-- ============== DNS ============== -->
           <template v-if="isDNS">
-            <a-form-item :label="t('pages.inbounds.network')">
-              <a-select v-model:value="outbound.settings.network">
+            <a-form-item label="Rewrite network">
+              <a-select v-model:value="outbound.settings.rewriteNetwork" allow-clear placeholder="(unchanged)">
                 <a-select-option v-for="x in ['udp', 'tcp']" :key="x" :value="x">{{ x }}</a-select-option>
               </a-select>
             </a-form-item>
+            <a-form-item label="Rewrite address">
+              <a-input v-model:value="outbound.settings.rewriteAddress" placeholder="(unchanged) e.g. 1.1.1.1" />
+            </a-form-item>
+            <a-form-item label="Rewrite port">
+              <a-input-number v-model:value="outbound.settings.rewritePort" :min="0" :max="65535"
+                :style="{ width: '100%' }" placeholder="(unchanged)" />
+            </a-form-item>
+            <a-form-item label="User level">
+              <a-input-number v-model:value="outbound.settings.userLevel" :min="0" :style="{ width: '100%' }" />
+            </a-form-item>
             <a-form-item label="Rules">
-              <a-button size="small" type="primary"
-                @click="outbound.settings.rules.push({ action: 'direct', qtype: '', domain: '' })">
+              <a-button size="small" type="primary" @click="outbound.settings.rules.push(new Outbound.DNSRule())">
                 <template #icon>
                   <PlusOutlined />
                 </template>
               </a-button>
             </a-form-item>
             <template v-for="(rule, index) in outbound.settings.rules || []" :key="index">
-              <div class="item-heading">
-                <span>Rule {{ index + 1 }}</span>
-                <DeleteOutlined class="danger-icon" @click="outbound.settings.rules.splice(index, 1)" />
-              </div>
+              <a-form-item :wrapper-col="{ md: { span: 14, offset: 8 } }" :colon="false">
+                <div class="item-heading">
+                  <span>Rule {{ index + 1 }}</span>
+                  <DeleteOutlined class="danger-icon" @click="outbound.settings.rules.splice(index, 1)" />
+                </div>
+              </a-form-item>
               <a-form-item label="Action">
                 <a-select v-model:value="rule.action">
                   <a-select-option v-for="a in DNSRuleActions" :key="a" :value="a">{{ a }}</a-select-option>
@@ -381,18 +403,20 @@ function regenerateWgKeys() {
             </a-form-item>
             <a-form-item label="Peers">
               <a-button size="small" type="primary"
-                @click="outbound.settings.peers.push({ endpoint: '', publicKey: '', psk: '', allowedIPs: [''], keepAlive: 0 })">
+                @click="outbound.settings.peers.push(new Outbound.WireguardSettings.Peer())">
                 <template #icon>
                   <PlusOutlined />
                 </template>
               </a-button>
             </a-form-item>
             <template v-for="(peer, index) in outbound.settings.peers || []" :key="index">
-              <div class="item-heading">
-                <span>Peer {{ index + 1 }}</span>
-                <DeleteOutlined v-if="outbound.settings.peers.length > 1" class="danger-icon"
-                  @click="outbound.settings.peers.splice(index, 1)" />
-              </div>
+              <a-form-item :wrapper-col="{ md: { span: 14, offset: 8 } }" :colon="false">
+                <div class="item-heading">
+                  <span>Peer {{ index + 1 }}</span>
+                  <DeleteOutlined v-if="outbound.settings.peers.length > 1" class="danger-icon"
+                    @click="outbound.settings.peers.splice(index, 1)" />
+                </div>
+              </a-form-item>
               <a-form-item label="Endpoint">
                 <a-input v-model:value="peer.endpoint" />
               </a-form-item>
@@ -927,11 +951,8 @@ function regenerateWgKeys() {
         <!-- Gated by canEnableStream() so TCP masks don't leak into
              Freedom / Blackhole / DNS / Socks / HTTP / Wireguard outbounds
              (they don't have a stream config at all). Matches legacy. -->
-        <FinalMaskForm
-          v-if="outbound.stream && outbound.canEnableStream()"
-          :stream="outbound.stream"
-          :protocol="proto"
-        />
+        <FinalMaskForm v-if="outbound.stream && outbound.canEnableStream()" :stream="outbound.stream"
+          :protocol="proto" />
       </a-tab-pane>
 
       <!-- ============================== JSON ============================== -->
@@ -981,9 +1002,9 @@ function regenerateWgKeys() {
 .item-heading {
   display: flex;
   align-items: center;
+  justify-content: space-between;
   gap: 8px;
   font-weight: 500;
-  margin: 8px 0 4px;
   opacity: 0.85;
 }
 

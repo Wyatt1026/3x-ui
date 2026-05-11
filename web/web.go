@@ -15,17 +15,17 @@ import (
 	"strings"
 	"time"
 
-	"github.com/mhsanaei/3x-ui/v2/config"
-	"github.com/mhsanaei/3x-ui/v2/logger"
-	"github.com/mhsanaei/3x-ui/v2/util/common"
-	"github.com/mhsanaei/3x-ui/v2/web/controller"
-	"github.com/mhsanaei/3x-ui/v2/web/job"
-	"github.com/mhsanaei/3x-ui/v2/web/locale"
-	"github.com/mhsanaei/3x-ui/v2/web/middleware"
-	"github.com/mhsanaei/3x-ui/v2/web/network"
-	"github.com/mhsanaei/3x-ui/v2/web/runtime"
-	"github.com/mhsanaei/3x-ui/v2/web/service"
-	"github.com/mhsanaei/3x-ui/v2/web/websocket"
+	"github.com/mhsanaei/3x-ui/v3/config"
+	"github.com/mhsanaei/3x-ui/v3/logger"
+	"github.com/mhsanaei/3x-ui/v3/util/common"
+	"github.com/mhsanaei/3x-ui/v3/web/controller"
+	"github.com/mhsanaei/3x-ui/v3/web/job"
+	"github.com/mhsanaei/3x-ui/v3/web/locale"
+	"github.com/mhsanaei/3x-ui/v3/web/middleware"
+	"github.com/mhsanaei/3x-ui/v3/web/network"
+	"github.com/mhsanaei/3x-ui/v3/web/runtime"
+	"github.com/mhsanaei/3x-ui/v3/web/service"
+	"github.com/mhsanaei/3x-ui/v3/web/websocket"
 
 	"github.com/gin-contrib/gzip"
 	"github.com/gin-contrib/sessions"
@@ -280,19 +280,15 @@ func (s *Server) startTask() {
 
 	go func() {
 		time.Sleep(time.Second * 5)
-		// Statistics every 10 seconds, start the delay for 5 seconds for the first time, and staggered with the time to restart xray
-		s.cron.AddJob("@every 10s", job.NewXrayTrafficJob())
+		s.cron.AddJob("@every 5s", job.NewXrayTrafficJob())
 	}()
 
 	// check client ips from log file every 10 sec
 	s.cron.AddJob("@every 10s", job.NewCheckClientIpJob())
 
-	// Probe every enabled remote node every 10 sec
-	s.cron.AddJob("@every 10s", job.NewNodeHeartbeatJob())
+	s.cron.AddJob("@every 5s", job.NewNodeHeartbeatJob())
 
-	// Pull traffic + online-clients from every online node every 10 sec
-	// and merge absolute counters into the central DB.
-	s.cron.AddJob("@every 10s", job.NewNodeTrafficSyncJob())
+	s.cron.AddJob("@every 5s", job.NewNodeTrafficSyncJob())
 
 	// check client ips from log file every day
 	s.cron.AddJob("@daily", job.NewClearLogsJob())
@@ -363,6 +359,8 @@ func (s *Server) Start() (err error) {
 	if err != nil {
 		return err
 	}
+	service.StartTrafficWriter()
+
 	s.cron = cron.New(cron.WithLocation(loc), cron.WithSeconds())
 	s.cron.Start()
 
@@ -447,6 +445,7 @@ func (s *Server) Stop() error {
 	if s.cron != nil {
 		s.cron.Stop()
 	}
+	service.StopTrafficWriter()
 	if s.tgbotService.IsRunning() {
 		s.tgbotService.Stop()
 	}

@@ -8,11 +8,11 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/mhsanaei/3x-ui/v2/logger"
-	"github.com/mhsanaei/3x-ui/v2/web/entity"
-	"github.com/mhsanaei/3x-ui/v2/web/global"
-	"github.com/mhsanaei/3x-ui/v2/web/service"
-	"github.com/mhsanaei/3x-ui/v2/web/websocket"
+	"github.com/mhsanaei/3x-ui/v3/logger"
+	"github.com/mhsanaei/3x-ui/v3/web/entity"
+	"github.com/mhsanaei/3x-ui/v3/web/global"
+	"github.com/mhsanaei/3x-ui/v3/web/service"
+	"github.com/mhsanaei/3x-ui/v3/web/websocket"
 
 	"github.com/gin-gonic/gin"
 )
@@ -143,16 +143,22 @@ func (a *ServerController) getMetricHistoryBucket(c *gin.Context) {
 	jsonObj(c, a.serverService.AggregateSystemMetric(metric, bucket, 60), nil)
 }
 
-// getXrayVersion retrieves available Xray versions, with caching for 1 minute.
 func (a *ServerController) getXrayVersion(c *gin.Context) {
+	const cacheTTLSeconds = 15 * 60
+
 	now := time.Now().Unix()
-	if now-a.lastGetVersionsTime <= 60 { // 1 minute cache
+	if a.lastVersions != nil && now-a.lastGetVersionsTime <= cacheTTLSeconds {
 		jsonObj(c, a.lastVersions, nil)
 		return
 	}
 
 	versions, err := a.serverService.GetXrayVersions()
 	if err != nil {
+		if a.lastVersions != nil {
+			logger.Warning("getXrayVersion failed; serving cached list:", err)
+			jsonObj(c, a.lastVersions, nil)
+			return
+		}
 		jsonMsg(c, I18nWeb(c, "getVersion"), err)
 		return
 	}
@@ -164,17 +170,11 @@ func (a *ServerController) getXrayVersion(c *gin.Context) {
 }
 
 // getPanelUpdateInfo retrieves the current and latest panel version.
-// Network failures (e.g. no internet, GitHub blocked) are logged at debug
-// level only — the panel keeps working offline and we don't want to spam
-// WARN every time a user opens the page.
 func (a *ServerController) getPanelUpdateInfo(c *gin.Context) {
 	info, err := a.panelService.GetUpdateInfo()
 	if err != nil {
 		logger.Debug("panel update check failed:", err)
-		c.JSON(http.StatusOK, entity.Msg{
-			Success: false,
-			Msg:     I18nWeb(c, "pages.index.panelUpdateCheckPopover"),
-		})
+		c.JSON(http.StatusOK, entity.Msg{Success: false})
 		return
 	}
 	jsonObj(c, info, nil)
@@ -343,10 +343,6 @@ func (a *ServerController) importDB(c *gin.Context) {
 		return
 	}
 	defer file.Close()
-	// Always restart Xray before return
-	defer a.serverService.RestartXrayService()
-	// lastGetStatusTime removed; no longer needed
-	// Import it
 	err = a.serverService.ImportDB(file)
 	if err != nil {
 		jsonMsg(c, I18nWeb(c, "pages.index.importDatabaseError"), err)

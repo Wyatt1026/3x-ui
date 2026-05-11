@@ -5,10 +5,10 @@ import (
 	"text/template"
 	"time"
 
-	"github.com/mhsanaei/3x-ui/v2/logger"
-	"github.com/mhsanaei/3x-ui/v2/web/middleware"
-	"github.com/mhsanaei/3x-ui/v2/web/service"
-	"github.com/mhsanaei/3x-ui/v2/web/session"
+	"github.com/mhsanaei/3x-ui/v3/logger"
+	"github.com/mhsanaei/3x-ui/v3/web/middleware"
+	"github.com/mhsanaei/3x-ui/v3/web/service"
+	"github.com/mhsanaei/3x-ui/v3/web/session"
 
 	"github.com/gin-gonic/gin"
 )
@@ -54,7 +54,8 @@ func (a *IndexController) initRouter(g *gin.RouterGroup) {
 // index handles the root route, redirecting logged-in users to the panel or showing the login page.
 func (a *IndexController) index(c *gin.Context) {
 	if session.IsLogin(c) {
-		c.Redirect(http.StatusTemporaryRedirect, "panel/")
+		c.Header("Cache-Control", "no-store")
+		c.Redirect(http.StatusTemporaryRedirect, c.GetString("base_path")+"panel/")
 		return
 	}
 	serveDistPage(c, "login.html")
@@ -148,6 +149,7 @@ func (a *IndexController) logout(c *gin.Context) {
 	if err := session.ClearSession(c); err != nil {
 		logger.Warning("Unable to clear session on logout:", err)
 	}
+	c.Header("Cache-Control", "no-store")
 	c.Redirect(http.StatusTemporaryRedirect, c.GetString("base_path"))
 }
 

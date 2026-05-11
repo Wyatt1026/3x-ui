@@ -54,7 +54,7 @@ async function sendUpdateUser() {
     if (msg?.success) {
       // Force re-login at the standard logout path; basePath is handled
       // by the Go router so a relative redirect is correct here.
-      const basePath = window.__X_UI_BASE_PATH__ || '';
+      const basePath = window.X_UI_BASE_PATH || '';
       window.location.replace(`${basePath}logout`);
     }
   } finally {
@@ -221,12 +221,7 @@ function toggleTwoFactor() {
         <template #title>{{ t('pages.nodes.apiToken') }}</template>
         <template #description>{{ t('pages.nodes.apiTokenHint') }}</template>
         <template #control>
-          <a-input-password
-            :value="apiToken"
-            readonly
-            :loading="apiTokenLoading"
-            style="min-width: 240px"
-          />
+          <a-input-password :value="apiToken" readonly :loading="apiTokenLoading" style="min-width: 240px" />
         </template>
       </SettingListItem>
       <a-list-item>

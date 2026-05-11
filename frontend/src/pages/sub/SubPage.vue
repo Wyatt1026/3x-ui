@@ -9,7 +9,6 @@ import {
   CopyOutlined,
 } from '@ant-design/icons-vue';
 import { message } from 'ant-design-vue';
-import QRious from 'qrious';
 
 import { ClipboardManager, IntlUtil, LanguageManager } from '@/utils';
 import {
@@ -38,6 +37,8 @@ const lastOnlineMs = Number(subData.lastOnline || 0);
 const subUrl = subData.subUrl || '';
 const subJsonUrl = subData.subJsonUrl || '';
 const subClashUrl = subData.subClashUrl || '';
+const subTitle = subData.subTitle || '';
+const subSupportUrl = subData.subSupportUrl || '';
 const links = Array.isArray(subData.links) ? subData.links : [];
 // Panel's "Calendar Type" setting; controls whether expiry / lastOnline
 // render in Gregorian or Jalali on this standalone subscription page.
@@ -71,32 +72,7 @@ function onLangChange(next) {
   LanguageManager.setLanguage(next);
 }
 
-// QR code rendering ===========================================
-// Each ref points at a canvas element we paint after mount; QRious
-// sizes itself from the element's `size` attribute.
-const subQr = ref(null);
-const subJsonQr = ref(null);
-const subClashQr = ref(null);
-
-function paintQr(canvas, value) {
-  if (!canvas || !value) return;
-  new QRious({
-    element: canvas,
-    size: 220,
-    value,
-    background: 'white',
-    backgroundAlpha: 1,
-    foreground: 'black',
-    padding: 4,
-    level: 'M',
-  });
-}
-
-onMounted(() => {
-  paintQr(subQr.value, subUrl);
-  paintQr(subJsonQr.value, subJsonUrl);
-  paintQr(subClashQr.value, subClashUrl);
-});
+const QR_SIZE = 240;
 
 // Actions =====================================================
 async function copy(value) {
@@ -128,7 +104,14 @@ function linkName(link, idx) {
 
 // iOS deep links — taken verbatim from the legacy subpage. Each
 // client expects the sub URL in a slightly different param name.
-const shadowrocketUrl = computed(() => `sub://${btoa(subUrl)}`);
+const shadowrocketUrl = computed(() => {
+  if (!subUrl) return '';
+  const separator = subUrl.includes('?') ? '&' : '?';
+  const rawUrl = subUrl + separator + 'flag=shadowrocket';
+  const base64Url = encodeURIComponent(btoa(rawUrl));
+  const remark = encodeURIComponent(subTitle || sId || 'Subscription');
+  return `shadowrocket://add/sub/${base64Url}?remark=${remark}`;
+});
 const v2boxUrl = computed(() => `v2box://install-sub?url=${encodeURIComponent(subUrl)}&name=${encodeURIComponent(sId)}`);
 const streisandUrl = computed(() => `streisand://import/${encodeURIComponent(subUrl)}`);
 const v2raytunUrl = computed(() => subUrl);
@@ -163,11 +146,8 @@ const themeClass = computed(() => ({
                       <ThemeSwitchLogin />
                       <span>{{ t('pages.settings.language') }}</span>
                       <a-select v-model:value="lang" class="lang-select" @change="onLangChange">
-                        <a-select-option
-                          v-for="l in LanguageManager.supportedLanguages"
-                          :key="l.value"
-                          :value="l.value"
-                        >
+                        <a-select-option v-for="l in LanguageManager.supportedLanguages" :key="l.value"
+                          :value="l.value">
                           <span :aria-label="l.name">{{ l.icon }}</span>
                           &nbsp;&nbsp;<span>{{ l.name }}</span>
                         </a-select-option>
@@ -175,7 +155,9 @@ const themeClass = computed(() => ({
                     </a-space>
                   </template>
                   <a-button shape="circle">
-                    <template #icon><SettingOutlined /></template>
+                    <template #icon>
+                      <SettingOutlined />
+                    </template>
                   </a-button>
                 </a-popover>
               </template>
@@ -185,12 +167,8 @@ const themeClass = computed(() => ({
                 <a-col :xs="24" :sm="subJsonUrl || subClashUrl ? 12 : 24" class="qr-col">
                   <div class="qr-box">
                     <a-tag color="purple" class="qr-tag">{{ t('pages.settings.subSettings') }}</a-tag>
-                    <canvas
-                      ref="subQr"
-                      class="qr-canvas"
-                      :title="t('copy')"
-                      @click="copy(subUrl)"
-                    />
+                    <a-qrcode class="qr-code" :value="subUrl" :size="QR_SIZE" type="svg" :bordered="false"
+                      :title="t('copy')" @click="copy(subUrl)" />
                   </div>
                 </a-col>
                 <a-col v-if="subJsonUrl" :xs="24" :sm="12" class="qr-col">
@@ -198,23 +176,15 @@ const themeClass = computed(() => ({
                     <a-tag color="purple" class="qr-tag">
                       {{ t('pages.settings.subSettings') }} JSON
                     </a-tag>
-                    <canvas
-                      ref="subJsonQr"
-                      class="qr-canvas"
-                      :title="t('copy')"
-                      @click="copy(subJsonUrl)"
-                    />
+                    <a-qrcode class="qr-code" :value="subJsonUrl" :size="QR_SIZE" type="svg" :bordered="false"
+                      :title="t('copy')" @click="copy(subJsonUrl)" />
                   </div>
                 </a-col>
                 <a-col v-if="subClashUrl" :xs="24" :sm="12" class="qr-col">
                   <div class="qr-box">
                     <a-tag color="purple" class="qr-tag">Clash / Mihomo</a-tag>
-                    <canvas
-                      ref="subClashQr"
-                      class="qr-canvas"
-                      :title="t('copy')"
-                      @click="copy(subClashUrl)"
-                    />
+                    <a-qrcode class="qr-code" :value="subClashUrl" :size="QR_SIZE" type="svg" :bordered="false"
+                      :title="t('copy')" @click="copy(subClashUrl)" />
                   </div>
                 </a-col>
               </a-row>
@@ -248,12 +218,7 @@ const themeClass = computed(() => ({
 
               <!-- ============== Individual links ============== -->
               <div v-if="links.length" class="links-section">
-                <div
-                  v-for="(link, idx) in links"
-                  :key="link"
-                  class="link-row"
-                  @click="copy(link)"
-                >
+                <div v-for="(link, idx) in links" :key="link" class="link-row" @click="copy(link)">
                   <a-tag color="purple" class="link-tag">{{ linkName(link, idx) }}</a-tag>
                   <div class="link-box">
                     <CopyOutlined class="link-copy-icon" />
@@ -267,12 +232,15 @@ const themeClass = computed(() => ({
                 <a-col :xs="24" :sm="12" class="app-col">
                   <a-dropdown :trigger="['click']">
                     <a-button :block="isMobile" size="large" type="primary">
-                      <AndroidOutlined /> Android <DownOutlined />
+                      <AndroidOutlined /> Android
+                      <DownOutlined />
                     </a-button>
                     <template #overlay>
                       <a-menu>
-                        <a-menu-item key="android-v2box" @click="open(`v2box://install-sub?url=${encodeURIComponent(subUrl)}&name=${encodeURIComponent(sId)}`)">V2Box</a-menu-item>
-                        <a-menu-item key="android-v2rayng" @click="open(`v2rayng://install-config?url=${encodeURIComponent(subUrl)}`)">V2RayNG</a-menu-item>
+                        <a-menu-item key="android-v2box"
+                          @click="open(`v2box://install-sub?url=${encodeURIComponent(subUrl)}&name=${encodeURIComponent(sId)}`)">V2Box</a-menu-item>
+                        <a-menu-item key="android-v2rayng"
+                          @click="open(`v2rayng://install-config?url=${encodeURIComponent(subUrl)}`)">V2RayNG</a-menu-item>
                         <a-menu-item key="android-singbox" @click="copy(subUrl)">Sing-box</a-menu-item>
                         <a-menu-item key="android-v2raytun" @click="copy(subUrl)">V2RayTun</a-menu-item>
                         <a-menu-item key="android-npvtunnel" @click="copy(subUrl)">NPV Tunnel</a-menu-item>
@@ -284,7 +252,8 @@ const themeClass = computed(() => ({
                 <a-col :xs="24" :sm="12" class="app-col">
                   <a-dropdown :trigger="['click']">
                     <a-button :block="isMobile" size="large" type="primary">
-                      <AppleOutlined /> iOS <DownOutlined />
+                      <AppleOutlined /> iOS
+                      <DownOutlined />
                     </a-button>
                     <template #overlay>
                       <a-menu>
@@ -314,14 +283,17 @@ const themeClass = computed(() => ({
   min-height: 100vh;
   background: var(--bg-page);
 }
+
 .subscription-page.is-dark {
-  --bg-page: #0a1222;
-  --bg-card: #151f31;
+  --bg-page: #1e1e1e;
+  --bg-card: #252526;
 }
+
 .subscription-page.is-dark.is-ultra {
   --bg-page: #050505;
   --bg-card: #0c0e12;
 }
+
 .subscription-page :deep(.ant-layout),
 .subscription-page :deep(.ant-layout-content) {
   background: transparent;
@@ -339,24 +311,29 @@ const themeClass = computed(() => ({
 .qr-row {
   margin-bottom: 12px;
 }
+
 .qr-col {
   display: flex;
   justify-content: center;
 }
+
 .qr-box {
   display: inline-flex;
   flex-direction: column;
   align-items: center;
   gap: 4px;
-  width: 220px;
+  width: 240px;
 }
+
 .qr-tag {
   width: 100%;
   text-align: center;
   margin: 0;
 }
-.qr-canvas {
+
+.qr-code {
   cursor: pointer;
+  padding: 0 !important;
   background: #fff;
   border-radius: 4px;
 }
@@ -370,16 +347,19 @@ const themeClass = computed(() => ({
 .info-table {
   margin-top: 12px;
 }
+
 .info-table :deep(.ant-descriptions-view),
 .info-table :deep(.ant-descriptions-view) table,
 .info-table :deep(.ant-descriptions-view) th,
 .info-table :deep(.ant-descriptions-view) td {
   border-color: rgba(0, 0, 0, 0.18) !important;
 }
+
 .info-table :deep(tbody > tr > th),
 .info-table :deep(tbody > tr > td) {
   border-bottom: 1px solid rgba(0, 0, 0, 0.18) !important;
 }
+
 .info-table :deep(tbody > tr:last-child > th),
 .info-table :deep(tbody > tr:last-child > td) {
   border-bottom: none !important;
@@ -391,10 +371,12 @@ const themeClass = computed(() => ({
 .is-dark .info-table :deep(.ant-descriptions-view) td {
   border-color: rgba(255, 255, 255, 0.18) !important;
 }
+
 .is-dark .info-table :deep(tbody > tr > th),
 .is-dark .info-table :deep(tbody > tr > td) {
   border-bottom: 1px solid rgba(255, 255, 255, 0.18) !important;
 }
+
 .is-dark .info-table :deep(tbody > tr:last-child > th),
 .is-dark .info-table :deep(tbody > tr:last-child > td) {
   border-bottom: none !important;
@@ -404,17 +386,20 @@ const themeClass = computed(() => ({
 .links-section {
   margin-top: 16px;
 }
+
 .link-row {
   position: relative;
   margin-bottom: 16px;
   text-align: center;
 }
+
 .link-tag {
   margin-bottom: -10px;
   position: relative;
   z-index: 2;
   box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
 }
+
 .link-box {
   cursor: pointer;
   border-radius: 12px;
@@ -430,19 +415,23 @@ const themeClass = computed(() => ({
   background: rgba(0, 0, 0, 0.03);
   border: 1px solid rgba(0, 0, 0, 0.08);
 }
+
 .link-box:hover {
   background: rgba(0, 0, 0, 0.05);
   border-color: rgba(0, 0, 0, 0.14);
 }
+
 .link-copy-icon {
   margin-right: 6px;
   opacity: 0.6;
 }
+
 .is-dark .link-box {
   background: rgba(0, 0, 0, 0.2);
   border-color: rgba(255, 255, 255, 0.1);
   color: rgba(255, 255, 255, 0.85);
 }
+
 .is-dark .link-box:hover {
   background: rgba(0, 0, 0, 0.3);
   border-color: rgba(255, 255, 255, 0.2);
@@ -452,6 +441,7 @@ const themeClass = computed(() => ({
 .apps-row {
   margin-top: 24px;
 }
+
 .app-col {
   text-align: center;
 }
@@ -459,6 +449,7 @@ const themeClass = computed(() => ({
 .settings-popover {
   min-width: 220px;
 }
+
 .lang-select {
   width: 100%;
 }

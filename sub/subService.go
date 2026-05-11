@@ -13,13 +13,13 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/goccy/go-json"
 
-	"github.com/mhsanaei/3x-ui/v2/database"
-	"github.com/mhsanaei/3x-ui/v2/database/model"
-	"github.com/mhsanaei/3x-ui/v2/logger"
-	"github.com/mhsanaei/3x-ui/v2/util/common"
-	"github.com/mhsanaei/3x-ui/v2/util/random"
-	"github.com/mhsanaei/3x-ui/v2/web/service"
-	"github.com/mhsanaei/3x-ui/v2/xray"
+	"github.com/mhsanaei/3x-ui/v3/database"
+	"github.com/mhsanaei/3x-ui/v3/database/model"
+	"github.com/mhsanaei/3x-ui/v3/logger"
+	"github.com/mhsanaei/3x-ui/v3/util/common"
+	"github.com/mhsanaei/3x-ui/v3/util/random"
+	"github.com/mhsanaei/3x-ui/v3/web/service"
+	"github.com/mhsanaei/3x-ui/v3/xray"
 )
 
 // SubService provides business logic for generating subscription links and managing subscription data.
@@ -539,7 +539,7 @@ func (s *SubService) genHysteriaLink(inbound *model.Inbound, email string) strin
 
 // loadNodes refreshes nodesByID from the DB. Called once per request so
 // the per-inbound resolveInboundAddress lookups are pure map reads.
-// We filter to address != '' so a half-configured node row doesn't
+// We filter to address != ” so a half-configured node row doesn't
 // accidentally produce a useless host like "https://:2053".
 func (s *SubService) loadNodes() {
 	db := database.GetDB()
@@ -1413,25 +1413,27 @@ func searchHost(headers any) string {
 // PageData is a view model for subpage.html
 // PageData contains data for rendering the subscription information page.
 type PageData struct {
-	Host         string
-	BasePath     string
-	SId          string
-	Enabled      bool
-	Download     string
-	Upload       string
-	Total        string
-	Used         string
-	Remained     string
-	Expire       int64
-	LastOnline   int64
-	Datepicker   string
-	DownloadByte int64
-	UploadByte   int64
-	TotalByte    int64
-	SubUrl       string
-	SubJsonUrl   string
-	SubClashUrl  string
-	Result       []string
+	Host          string
+	BasePath      string
+	SId           string
+	Enabled       bool
+	Download      string
+	Upload        string
+	Total         string
+	Used          string
+	Remained      string
+	Expire        int64
+	LastOnline    int64
+	Datepicker    string
+	DownloadByte  int64
+	UploadByte    int64
+	TotalByte     int64
+	SubUrl        string
+	SubJsonUrl    string
+	SubClashUrl   string
+	SubTitle      string
+	SubSupportUrl string
+	Result        []string
 }
 
 // ResolveRequest extracts scheme and host info from request/headers consistently.
@@ -1545,7 +1547,7 @@ func (s *SubService) joinPathWithID(basePath, subId string) string {
 
 // BuildPageData parses header and prepares the template view model.
 // BuildPageData constructs page data for rendering the subscription information page.
-func (s *SubService) BuildPageData(subId string, hostHeader string, traffic xray.ClientTraffic, lastOnline int64, subs []string, subURL, subJsonURL, subClashURL string, basePath string) PageData {
+func (s *SubService) BuildPageData(subId string, hostHeader string, traffic xray.ClientTraffic, lastOnline int64, subs []string, subURL, subJsonURL, subClashURL string, basePath string, subTitle string, subSupportUrl string) PageData {
 	download := common.FormatTraffic(traffic.Down)
 	upload := common.FormatTraffic(traffic.Up)
 	total := "∞"
@@ -1563,25 +1565,27 @@ func (s *SubService) BuildPageData(subId string, hostHeader string, traffic xray
 	}
 
 	return PageData{
-		Host:         hostHeader,
-		BasePath:     basePath,
-		SId:          subId,
-		Enabled:      traffic.Enable,
-		Download:     download,
-		Upload:       upload,
-		Total:        total,
-		Used:         used,
-		Remained:     remained,
-		Expire:       traffic.ExpiryTime / 1000,
-		LastOnline:   lastOnline,
-		Datepicker:   datepicker,
-		DownloadByte: traffic.Down,
-		UploadByte:   traffic.Up,
-		TotalByte:    traffic.Total,
-		SubUrl:       subURL,
-		SubJsonUrl:   subJsonURL,
-		SubClashUrl:  subClashURL,
-		Result:       subs,
+		Host:          hostHeader,
+		BasePath:      basePath,
+		SId:           subId,
+		Enabled:       traffic.Enable,
+		Download:      download,
+		Upload:        upload,
+		Total:         total,
+		Used:          used,
+		Remained:      remained,
+		Expire:        traffic.ExpiryTime / 1000,
+		LastOnline:    lastOnline,
+		Datepicker:    datepicker,
+		DownloadByte:  traffic.Down,
+		UploadByte:    traffic.Up,
+		TotalByte:     traffic.Total,
+		SubUrl:        subURL,
+		SubJsonUrl:    subJsonURL,
+		SubClashUrl:   subClashURL,
+		SubTitle:      subTitle,
+		SubSupportUrl: subSupportUrl,
+		Result:        subs,
 	}
 }
 

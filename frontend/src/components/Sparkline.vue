@@ -1,5 +1,5 @@
 <script setup>
-import { computed, ref } from 'vue';
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
 
 const props = defineProps({
   data: { type: Array, required: true },
@@ -36,8 +36,37 @@ const props = defineProps({
 
 const hoverIdx = ref(-1);
 
-const viewBoxAttr = computed(() => `0 0 ${props.vbWidth} ${props.height}`);
-const drawWidth = computed(() => Math.max(1, props.vbWidth - props.paddingLeft - props.paddingRight));
+// Measured CSS width of the SVG. Drives the viewBox so SVG units stay
+// 1:1 with rendered pixels — otherwise `preserveAspectRatio="none"`
+// stretches the X axis and squashes axis text horizontally on narrow
+// containers (mobile). Falls back to the prop until the first measure.
+const svgRef = ref(null);
+const measuredWidth = ref(0);
+const effectiveVbWidth = computed(() => measuredWidth.value > 0 ? measuredWidth.value : props.vbWidth);
+
+let resizeObserver = null;
+function measure() {
+  const el = svgRef.value;
+  if (!el) return;
+  const w = el.getBoundingClientRect?.().width || 0;
+  if (w > 0) measuredWidth.value = Math.round(w);
+}
+onMounted(() => {
+  measure();
+  if (typeof ResizeObserver !== 'undefined' && svgRef.value) {
+    resizeObserver = new ResizeObserver(measure);
+    resizeObserver.observe(svgRef.value);
+  } else {
+    window.addEventListener('resize', measure);
+  }
+});
+onBeforeUnmount(() => {
+  if (resizeObserver) resizeObserver.disconnect();
+  else window.removeEventListener('resize', measure);
+});
+
+const viewBoxAttr = computed(() => `0 0 ${effectiveVbWidth.value} ${props.height}`);
+const drawWidth = computed(() => Math.max(1, effectiveVbWidth.value - props.paddingLeft - props.paddingRight));
 const drawHeight = computed(() => Math.max(1, props.height - props.paddingTop - props.paddingBottom));
 const nPoints = computed(() => Math.min(props.data.length, props.maxPoints));
 
@@ -164,7 +193,7 @@ function onMouseMove(evt) {
   if (!props.showTooltip || pointsArr.value.length === 0) return;
   const rect = evt.currentTarget.getBoundingClientRect();
   const px = evt.clientX - rect.left;
-  const x = (px / rect.width) * props.vbWidth;
+  const x = (px / rect.width) * effectiveVbWidth.value;
   const n = nPoints.value;
   const dx = n > 1 ? drawWidth.value / (n - 1) : 0;
   const idx = Math.max(0, Math.min(n - 1, Math.round((x - props.paddingLeft) / (dx || 1))));
@@ -191,15 +220,8 @@ const gradId = `spkGrad-${Math.random().toString(36).slice(2, 9)}`;
 </script>
 
 <template>
-  <svg
-    width="100%"
-    :height="height"
-    :viewBox="viewBoxAttr"
-    preserveAspectRatio="none"
-    class="sparkline-svg"
-    @mousemove="onMouseMove"
-    @mouseleave="onMouseLeave"
-  >
+  <svg ref="svgRef" width="100%" :height="height" :viewBox="viewBoxAttr" preserveAspectRatio="none"
+    class="sparkline-svg" @mousemove="onMouseMove" @mouseleave="onMouseLeave">
     <defs>
       <linearGradient :id="gradId" x1="0" y1="0" x2="0" y2="1">
         <stop offset="0%" :stop-color="stroke" :stop-opacity="fillOpacity" />
@@ -208,70 +230,28 @@ const gradId = `spkGrad-${Math.random().toString(36).slice(2, 9)}`;
     </defs>
 
     <g v-if="showGrid">
-      <line
-        v-for="(g, i) in gridLines"
-        :key="i"
-        :x1="g.x1" :y1="g.y1" :x2="g.x2" :y2="g.y2"
-        :stroke="gridColor" stroke-width="1"
-        class="cpu-grid-line"
-      />
+      <line v-for="(g, i) in gridLines" :key="i" :x1="g.x1" :y1="g.y1" :x2="g.x2" :y2="g.y2" :stroke="gridColor"
+        stroke-width="1" class="cpu-grid-line" />
     </g>
 
     <g v-if="showAxes">
-      <text
-        v-for="(t, i) in yTicks"
-        :key="'y' + i"
-        class="cpu-grid-y-text"
-        :x="Math.max(0, paddingLeft - 4)"
-        :y="t.y + 4"
-        text-anchor="end"
-        font-size="10"
-      >{{ t.label }}</text>
-      <text
-        v-for="(t, i) in xTicks"
-        :key="'x' + i"
-        class="cpu-grid-x-text"
-        :x="t.x"
-        :y="paddingTop + drawHeight + 14"
-        text-anchor="middle"
-        font-size="10"
-      >{{ t.label }}</text>
+      <text v-for="(t, i) in yTicks" :key="'y' + i" class="cpu-grid-y-text" :x="Math.max(0, paddingLeft - 4)"
+        :y="t.y + 4" text-anchor="end" font-size="10">{{ t.label }}</text>
+      <text v-for="(t, i) in xTicks" :key="'x' + i" class="cpu-grid-x-text" :x="t.x" :y="paddingTop + drawHeight + 14"
+        text-anchor="middle" font-size="10">{{ t.label }}</text>
     </g>
 
     <path v-if="areaPath" :d="areaPath" :fill="`url(#${gradId})`" stroke="none" />
-    <polyline
-      :points="pointsStr"
-      fill="none"
-      :stroke="stroke"
-      :stroke-width="strokeWidth"
-      stroke-linecap="round"
-      stroke-linejoin="round"
-    />
-    <circle
-      v-if="showMarker && lastPoint"
-      :cx="lastPoint[0]" :cy="lastPoint[1]"
-      :r="markerRadius"
-      :fill="stroke"
-    />
+    <polyline :points="pointsStr" fill="none" :stroke="stroke" :stroke-width="strokeWidth" stroke-linecap="round"
+      stroke-linejoin="round" />
+    <circle v-if="showMarker && lastPoint" :cx="lastPoint[0]" :cy="lastPoint[1]" :r="markerRadius" :fill="stroke" />
 
     <g v-if="showTooltip && hoverIdx >= 0 && pointsArr[hoverIdx]">
-      <line
-        class="cpu-grid-h-line"
-        :x1="pointsArr[hoverIdx][0]" :x2="pointsArr[hoverIdx][0]"
-        :y1="paddingTop" :y2="paddingTop + drawHeight"
-        stroke="rgba(0,0,0,0.2)" stroke-width="1"
-      />
-      <circle
-        :cx="pointsArr[hoverIdx][0]" :cy="pointsArr[hoverIdx][1]"
-        r="3.5" :fill="stroke"
-      />
-      <text
-        class="cpu-grid-text"
-        :x="pointsArr[hoverIdx][0]"
-        :y="paddingTop + 12"
-        text-anchor="middle"
-        font-size="11"
-      >{{ fmtHoverText() }}</text>
+      <line class="cpu-grid-h-line" :x1="pointsArr[hoverIdx][0]" :x2="pointsArr[hoverIdx][0]" :y1="paddingTop"
+        :y2="paddingTop + drawHeight" stroke="rgba(0,0,0,0.2)" stroke-width="1" />
+      <circle :cx="pointsArr[hoverIdx][0]" :cy="pointsArr[hoverIdx][1]" r="3.5" :fill="stroke" />
+      <text class="cpu-grid-text" :x="pointsArr[hoverIdx][0]" :y="paddingTop + 12" text-anchor="middle"
+        font-size="11">{{ fmtHoverText() }}</text>
     </g>
   </svg>
 </template>

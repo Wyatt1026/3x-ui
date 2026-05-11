@@ -191,6 +191,8 @@ export function useInbounds() {
         if (typeof upd.up === 'number') ib.up = upd.up;
         if (typeof upd.down === 'number') ib.down = upd.down;
         if (typeof upd.allTime === 'number') ib.allTime = upd.allTime;
+        if (typeof upd.total === 'number') ib.total = upd.total;
+        if (typeof upd.enable === 'boolean') ib.enable = upd.enable;
         touched = true;
       }
     }
@@ -209,14 +211,15 @@ export function useInbounds() {
           if (typeof upd.up === 'number') stat.up = upd.up;
           if (typeof upd.down === 'number') stat.down = upd.down;
           if (typeof upd.total === 'number') stat.total = upd.total;
+          if (typeof upd.allTime === 'number') stat.allTime = upd.allTime;
           if (typeof upd.expiryTime === 'number') stat.expiryTime = upd.expiryTime;
+          if (typeof upd.enable === 'boolean') stat.enable = upd.enable;
           touched = true;
         }
       }
     }
 
     if (touched) {
-      // shallowRef → trigger reactivity by reassigning the same array.
       dbInbounds.value = [...dbInbounds.value];
       rebuildClientCount();
     }
@@ -228,9 +231,14 @@ export function useInbounds() {
   // re-fetch via REST".
   function applyInvalidate(payload) {
     if (!payload || typeof payload !== 'object') return;
-    if (payload.dataType === 'inbounds') {
+    if (payload.type === 'inbounds') {
       refresh();
     }
+  }
+
+  function applyInboundsEvent(payload) {
+    if (!Array.isArray(payload)) return;
+    setInbounds(payload);
   }
 
   // Recompute the per-inbound roll-up after any in-place mutation.
@@ -279,6 +287,7 @@ export function useInbounds() {
     const deactive = [];
     const depleted = [];
     const expiring = [];
+    const online = [];
     for (const ib of dbInbounds.value) {
       up += ib.up || 0;
       down += ib.down || 0;
@@ -289,9 +298,10 @@ export function useInbounds() {
         deactive.push(...c.deactive);
         depleted.push(...c.depleted);
         expiring.push(...c.expiring);
+        online.push(...c.online);
       }
     }
-    return { up, down, allTime, clients, deactive, depleted, expiring };
+    return { up, down, allTime, clients, deactive, depleted, expiring, online };
   });
 
   // ObjectUtil reference is wired at module load — keeping a no-op import
@@ -319,5 +329,6 @@ export function useInbounds() {
     applyTrafficEvent,
     applyClientStatsEvent,
     applyInvalidate,
+    applyInboundsEvent,
   };
 }

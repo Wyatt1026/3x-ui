@@ -39,7 +39,7 @@ useWebSocket({ nodes: applyNodesEvent });
 
 const { isMobile } = useMediaQuery();
 
-const basePath = window.__X_UI_BASE_PATH__ || '';
+const basePath = window.X_UI_BASE_PATH || '';
 const requestUri = window.location.pathname;
 
 // === Form modal state =================================================
@@ -100,10 +100,7 @@ async function onToggleEnable(node, next) {
 
 <template>
   <a-config-provider :theme="antdThemeConfig">
-    <a-layout
-      class="nodes-page"
-      :class="{ 'is-dark': themeState.isDark, 'is-ultra': themeState.isUltra }"
-    >
+    <a-layout class="nodes-page" :class="{ 'is-dark': themeState.isDark, 'is-ultra': themeState.isUltra }">
       <AppSidebar :base-path="basePath" :request-uri="requestUri" />
 
       <a-layout class="content-shell">
@@ -117,40 +114,29 @@ async function onToggleEnable(node, next) {
                 <a-card size="small" hoverable class="summary-card">
                   <a-row :gutter="[16, 12]">
                     <a-col :sm="12" :md="6">
-                      <CustomStatistic
-                        :title="t('pages.nodes.totalNodes')"
-                        :value="String(totals.total)"
-                      >
+                      <CustomStatistic :title="t('pages.nodes.totalNodes')" :value="String(totals.total)">
                         <template #prefix>
                           <CloudServerOutlined />
                         </template>
                       </CustomStatistic>
                     </a-col>
                     <a-col :sm="12" :md="6">
-                      <CustomStatistic
-                        :title="t('pages.nodes.onlineNodes')"
-                        :value="String(totals.online)"
-                      >
+                      <CustomStatistic :title="t('pages.nodes.onlineNodes')" :value="String(totals.online)">
                         <template #prefix>
                           <CheckCircleOutlined style="color: #52c41a" />
                         </template>
                       </CustomStatistic>
                     </a-col>
                     <a-col :sm="12" :md="6">
-                      <CustomStatistic
-                        :title="t('pages.nodes.offlineNodes')"
-                        :value="String(totals.offline)"
-                      >
+                      <CustomStatistic :title="t('pages.nodes.offlineNodes')" :value="String(totals.offline)">
                         <template #prefix>
                           <CloseCircleOutlined style="color: #ff4d4f" />
                         </template>
                       </CustomStatistic>
                     </a-col>
                     <a-col :sm="12" :md="6">
-                      <CustomStatistic
-                        :title="t('pages.nodes.avgLatency')"
-                        :value="totals.avgLatency > 0 ? `${totals.avgLatency} ms` : '-'"
-                      >
+                      <CustomStatistic :title="t('pages.nodes.avgLatency')"
+                        :value="totals.avgLatency > 0 ? `${totals.avgLatency} ms` : '-'">
                         <template #prefix>
                           <ThunderboltOutlined />
                         </template>
@@ -162,29 +148,16 @@ async function onToggleEnable(node, next) {
 
               <!-- Node table -->
               <a-col :span="24">
-                <NodeList
-                  :nodes="nodes"
-                  :loading="loading"
-                  :is-mobile="isMobile"
-                  @add="onAdd"
-                  @edit="onEdit"
-                  @delete="onDelete"
-                  @probe="onProbe"
-                  @toggle-enable="onToggleEnable"
-                />
+                <NodeList :nodes="nodes" :loading="loading" :is-mobile="isMobile" @add="onAdd" @edit="onEdit"
+                  @delete="onDelete" @probe="onProbe" @toggle-enable="onToggleEnable" />
               </a-col>
             </a-row>
           </a-spin>
         </a-layout-content>
       </a-layout>
 
-      <NodeFormModal
-        v-model:open="formOpen"
-        :mode="formMode"
-        :node="formNode"
-        :test-connection="testConnection"
-        :save="onSave"
-      />
+      <NodeFormModal v-model:open="formOpen" :mode="formMode" :node="formNode" :test-connection="testConnection"
+        :save="onSave" />
     </a-layout>
   </a-config-provider>
 </template>
@@ -199,8 +172,8 @@ async function onToggleEnable(node, next) {
 }
 
 .nodes-page.is-dark {
-  --bg-page: #0a1222;
-  --bg-card: #151f31;
+  --bg-page: #1e1e1e;
+  --bg-card: #252526;
 }
 
 .nodes-page.is-dark.is-ultra {

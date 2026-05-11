@@ -26,7 +26,7 @@ const { t } = useI18n();
 const { fetched, spinning, saveDisabled, allSetting, saveAll } = useAllSetting();
 const { isMobile } = useMediaQuery();
 
-const basePath = window.__X_UI_BASE_PATH__ || '';
+const basePath = window.X_UI_BASE_PATH || '';
 const requestUri = window.location.pathname;
 
 // AD-Vue 4's <a-back-top> calls `target()` after mount to find the
@@ -96,27 +96,25 @@ function rebuildUrlAfterRestart() {
   return url.toString();
 }
 
-async function restartPanel() {
-  await new Promise((resolve, reject) => {
-    Modal.confirm({
-      title: 'Restart panel',
-      content: 'Restart the panel now? Your session will reconnect once it comes back.',
-      okText: 'Restart',
-      cancelText: 'Cancel',
-      onOk: () => resolve(),
-      onCancel: () => reject(new Error('cancelled')),
-    });
-  }).catch(() => null);
-
-  spinning.value = true;
-  try {
-    const msg = await HttpUtil.post('/panel/setting/restartPanel');
-    if (!msg?.success) return;
-    await PromiseUtil.sleep(5000);
-    window.location.replace(rebuildUrlAfterRestart());
-  } finally {
-    spinning.value = false;
-  }
+function restartPanel() {
+  Modal.confirm({
+    title: t('pages.settings.restartPanel'),
+    content: t('pages.settings.restartPanelDesc'),
+    okText: t('pages.settings.restartPanel'),
+    okButtonProps: { danger: true },
+    cancelText: t('cancel'),
+    async onOk() {
+      spinning.value = true;
+      try {
+        const msg = await HttpUtil.post('/panel/setting/restartPanel');
+        if (!msg?.success) return;
+        await PromiseUtil.sleep(5000);
+        window.location.replace(rebuildUrlAfterRestart());
+      } finally {
+        spinning.value = false;
+      }
+    },
+  });
 }
 
 // Conf alerts mirror the legacy banner — pure derivation off allSetting.
@@ -258,8 +256,8 @@ const alertVisible = ref(true);
 }
 
 .settings-page.is-dark {
-  --bg-page: #0a1222;
-  --bg-card: #151f31;
+  --bg-page: #1e1e1e;
+  --bg-card: #252526;
 }
 
 .settings-page.is-dark.is-ultra {

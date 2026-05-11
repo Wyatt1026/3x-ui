@@ -242,8 +242,8 @@ const title = computed(() =>
       {{ t('depleted') }}
     </a-tag>
 
-    <a-form v-if="client && inbound" layout="horizontal" :colon="false" :label-col="{ md: { span: 8 } }"
-      :wrapper-col="{ md: { span: 14 } }">
+    <a-form v-if="client && inbound" layout="horizontal" :colon="false" :label-col="{ sm: { span: 8 } }"
+      :wrapper-col="{ sm: { span: 14 } }">
       <a-form-item :label="t('enable')">
         <a-switch v-model:checked="client.enable" />
       </a-form-item>
@@ -362,7 +362,7 @@ const title = computed(() =>
       <a-form-item v-else>
         <template #label>
           <a-tooltip :title="t('pages.inbounds.leaveBlankToNeverExpire')">{{ t('pages.inbounds.expireDate')
-            }}</a-tooltip>
+          }}</a-tooltip>
         </template>
         <DateTimePicker v-model:value="expiryDate" />
         <a-tag v-if="mode === 'edit' && isExpired" color="red">{{ t('depleted') }}</a-tag>
