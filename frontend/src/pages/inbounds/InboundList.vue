@@ -1,5 +1,5 @@
 <script setup>
-import { computed, ref } from 'vue';
+import { computed, ref, watch } from 'vue';
 import { useI18n } from 'vue-i18n';
 import {
   PlusOutlined,
@@ -118,6 +118,56 @@ const visibleInbounds = computed(() => {
   return out;
 });
 
+// ============ Sorting =================================================
+const sortState = ref({ column: null, order: null });
+
+function sortableCol(col, key) {
+  return {
+    ...col,
+    sorter: true,
+    showSorterTooltip: false,
+    sortOrder: sortState.value.column === key ? sortState.value.order : null,
+    sortDirections: ['ascend', 'descend'],
+  };
+}
+
+const sortFns = {
+  id: (a, b) => a.id - b.id,
+  enable: (a, b) => Number(a.enable) - Number(b.enable),
+  remark: (a, b) => (a.remark || '').localeCompare(b.remark || ''),
+  port: (a, b) => a.port - b.port,
+  protocol: (a, b) => a.protocol.localeCompare(b.protocol),
+  traffic: (a, b) => (a.up + a.down) - (b.up + b.down),
+  allTimeInbound: (a, b) => (a.allTime || 0) - (b.allTime || 0),
+  expiryTime: (a, b) => (a.expiryTime || Infinity) - (b.expiryTime || Infinity),
+  node: (a, b) => {
+    const nameA = props.nodesById.get(a.nodeId)?.name ?? (a.nodeId == null ? '\uffff' : `node #${a.nodeId}`);
+    const nameB = props.nodesById.get(b.nodeId)?.name ?? (b.nodeId == null ? '\uffff' : `node #${b.nodeId}`);
+    return nameA.localeCompare(nameB);
+  },
+  clients: (a, b) => (props.clientCount[a.id]?.clients || 0) - (props.clientCount[b.id]?.clients || 0),
+};
+
+const sortedInbounds = computed(() => {
+  const { column, order } = sortState.value;
+  if (!column || !order) return visibleInbounds.value;
+  const fn = sortFns[column];
+  if (!fn) return visibleInbounds.value;
+  const sorted = [...visibleInbounds.value].sort(fn);
+  return order === 'descend' ? sorted.reverse() : sorted;
+});
+
+function onTableChange(_pag, _filters, sorter) {
+  sortState.value = {
+    column: sorter?.columnKey || sorter?.field || null,
+    order: sorter?.order || null,
+  };
+}
+
+watch([searchKey, filterBy], () => {
+  sortState.value = { column: null, order: null };
+});
+
 // ============ Columns =================================================
 // `key`-driven so we can render via the body-cell slot below. AD-Vue 4's
 // `responsive` array still works on column defs. Computed so column
@@ -128,23 +178,23 @@ const hasAnyRemark = computed(() =>
 
 const desktopColumns = computed(() => {
   const cols = [
-    { title: 'ID', dataIndex: 'id', key: 'id', align: 'right', width: 30 },
+    sortableCol({ title: 'ID', dataIndex: 'id', key: 'id', align: 'right', width: 30 }, 'id'),
     { title: t('pages.inbounds.operate'), key: 'action', align: 'center', width: 30 },
-    { title: t('pages.inbounds.enable'), key: 'enable', align: 'center', width: 35 },
+    sortableCol({ title: t('pages.inbounds.enable'), key: 'enable', align: 'center', width: 35 }, 'enable'),
   ];
   if (hasAnyRemark.value) {
-    cols.push({ title: t('pages.inbounds.remark'), dataIndex: 'remark', key: 'remark', align: 'center', width: 60 });
+    cols.push(sortableCol({ title: t('pages.inbounds.remark'), dataIndex: 'remark', key: 'remark', align: 'center', width: 60 }, 'remark'));
   }
   if (props.nodesById.size > 0) {
-    cols.push({ title: t('pages.inbounds.node'), key: 'node', align: 'center', width: 60 });
+    cols.push(sortableCol({ title: t('pages.inbounds.node'), key: 'node', align: 'center', width: 60 }, 'node'));
   }
   cols.push(
-    { title: t('pages.inbounds.port'), dataIndex: 'port', key: 'port', align: 'center', width: 40 },
-    { title: t('pages.inbounds.protocol'), key: 'protocol', align: 'left', width: 130 },
-    { title: t('clients'), key: 'clients', align: 'left', width: 50 },
-    { title: t('pages.inbounds.traffic'), key: 'traffic', align: 'center', width: 90 },
-    { title: t('pages.inbounds.allTimeTraffic'), key: 'allTimeInbound', align: 'center', width: 95 },
-    { title: t('pages.inbounds.expireDate'), key: 'expiryTime', align: 'center', width: 40 },
+    sortableCol({ title: t('pages.inbounds.port'), dataIndex: 'port', key: 'port', align: 'center', width: 40 }, 'port'),
+    sortableCol({ title: t('pages.inbounds.protocol'), key: 'protocol', align: 'left', width: 130 }, 'protocol'),
+    sortableCol({ title: t('clients'), key: 'clients', align: 'left', width: 50 }, 'clients'),
+    sortableCol({ title: t('pages.inbounds.traffic'), key: 'traffic', align: 'center', width: 90 }, 'traffic'),
+    sortableCol({ title: t('pages.inbounds.allTimeTraffic'), key: 'allTimeInbound', align: 'center', width: 95 }, 'allTimeInbound'),
+    sortableCol({ title: t('pages.inbounds.expireDate'), key: 'expiryTime', align: 'center', width: 40 }, 'expiryTime'),
   );
   return cols;
 });
@@ -275,7 +325,7 @@ function showQrCodeMenu(dbInbound) {
       <div v-if="isMobile" class="inbound-cards">
         <div v-if="visibleInbounds.length === 0" class="card-empty">—</div>
 
-        <div v-for="record in visibleInbounds" :key="record.id" class="inbound-card">
+        <div v-for="record in sortedInbounds" :key="record.id" class="inbound-card">
           <!-- Header: chevron (multi-user only) + remark + enable + actions -->
           <div class="card-head" @click="record.isMultiUser() && toggleExpanded(record.id)">
             <RightOutlined v-if="record.isMultiUser()" class="card-expand"
@@ -345,8 +395,8 @@ function showQrCodeMenu(dbInbound) {
             <div class="stat-row">
               <span class="stat-label">{{ t('pages.inbounds.protocol') }}</span>
               <a-tag color="purple">{{ record.protocol }}</a-tag>
-              <template v-if="record.isVMess || record.isVLess || record.isTrojan || record.isSS">
-                <a-tag color="green">{{ record.toInbound().stream.network }}</a-tag>
+              <template v-if="record.isVMess || record.isVLess || record.isTrojan || record.isSS || record.isHysteria">
+                <a-tag color="green">{{ record.isHysteria ? 'UDP' : record.toInbound().stream.network }}</a-tag>
                 <a-tag v-if="record.toInbound().stream.isTls" color="blue">TLS</a-tag>
                 <a-tag v-if="record.toInbound().stream.isReality" color="blue">Reality</a-tag>
               </template>
@@ -380,7 +430,7 @@ function showQrCodeMenu(dbInbound) {
             </div>
             <div v-if="clientCount[record.id]" class="stat-row">
               <span class="stat-label">{{ t('clients') }}</span>
-              <a-tag color="green">{{ clientCount[record.id].clients }}</a-tag>
+              <a-tag color="green" class="client-count-tag">{{ clientCount[record.id].clients }}</a-tag>
               <a-tag v-if="clientCount[record.id].online.length" color="blue">
                 {{ clientCount[record.id].online.length }} {{ t('online') }}
               </a-tag>
@@ -407,7 +457,7 @@ function showQrCodeMenu(dbInbound) {
           <div v-if="record.isMultiUser() && isExpanded(record.id)" class="card-clients">
             <ClientRowTable :db-inbound="record" :is-mobile="true" :traffic-diff="trafficDiff" :expire-diff="expireDiff"
               :online-clients="onlineClients" :last-online-map="lastOnlineMap" :is-dark-theme="isDarkTheme"
-              :page-size="pageSize"
+              :page-size="pageSize" :total-client-count="clientCount[record.id]?.clients || 0"
               @edit-client="(p) => emit('edit-client', p)" @qrcode-client="(p) => emit('qrcode-client', p)"
               @info-client="(p) => emit('info-client', p)"
               @reset-traffic-client="(p) => emit('reset-traffic-client', p)"
@@ -419,9 +469,9 @@ function showQrCodeMenu(dbInbound) {
       </div>
 
       <!-- ====================== Desktop: a-table ======================== -->
-      <a-table v-else :columns="columns" :data-source="visibleInbounds" :row-key="(r) => r.id"
-        :pagination="paginationFor(visibleInbounds)" :scroll="{ x: 1000 }" :style="{ marginTop: '10px' }" size="small"
-        :row-class-name="(r) => (r.isMultiUser() ? '' : 'hide-expand-icon')">
+      <a-table v-else :columns="columns" :data-source="sortedInbounds" :row-key="(r) => r.id"
+        :pagination="paginationFor(sortedInbounds)" :scroll="{ x: 1000 }" :style="{ marginTop: '10px' }" size="small"
+        :row-class-name="(r) => (r.isMultiUser() ? '' : 'hide-expand-icon')" @change="onTableChange">
         <!-- Per-inbound client list, expanded by clicking the row's
              default expand chevron. Hidden via row-class-name for
              non-multi-user inbounds (matches legacy behavior). -->
@@ -429,6 +479,7 @@ function showQrCodeMenu(dbInbound) {
           <ClientRowTable v-if="record.isMultiUser()" :db-inbound="record" :is-mobile="isMobile"
             :traffic-diff="trafficDiff" :expire-diff="expireDiff" :online-clients="onlineClients"
             :last-online-map="lastOnlineMap" :is-dark-theme="isDarkTheme" :page-size="pageSize"
+            :total-client-count="clientCount[record.id]?.clients || 0"
             @edit-client="(p) => emit('edit-client', p)"
             @qrcode-client="(p) => emit('qrcode-client', p)" @info-client="(p) => emit('info-client', p)"
             @reset-traffic-client="(p) => emit('reset-traffic-client', p)"
@@ -520,8 +571,8 @@ function showQrCodeMenu(dbInbound) {
           <template v-else-if="column.key === 'protocol'">
             <div class="protocol-tags">
               <a-tag color="purple">{{ record.protocol }}</a-tag>
-              <template v-if="record.isVMess || record.isVLess || record.isTrojan || record.isSS">
-                <a-tag color="green">{{ record.toInbound().stream.network }}</a-tag>
+              <template v-if="record.isVMess || record.isVLess || record.isTrojan || record.isSS || record.isHysteria">
+                <a-tag color="green">{{ record.isHysteria ? 'UDP' : record.toInbound().stream.network }}</a-tag>
                 <a-tag v-if="record.toInbound().stream.isTls" color="blue">TLS</a-tag>
                 <a-tag v-if="record.toInbound().stream.isReality" color="blue">Reality</a-tag>
               </template>
@@ -531,14 +582,14 @@ function showQrCodeMenu(dbInbound) {
           <!-- ============== Clients tag + popovers ============== -->
           <template v-else-if="column.key === 'clients'">
             <template v-if="clientCount[record.id]">
-              <a-tag color="green" style="margin: 0">{{ clientCount[record.id].clients }}</a-tag>
+              <a-tag color="green" class="client-count-tag" style="margin: 0; padding: 0 2px">{{ clientCount[record.id].clients }}</a-tag>
               <a-popover v-if="clientCount[record.id].deactive.length" :title="t('disabled')">
                 <template #content>
                   <div class="client-email-list">
                     <div v-for="email in clientCount[record.id].deactive" :key="email">{{ email }}</div>
                   </div>
                 </template>
-                <a-tag style="margin: 0; padding: 0 2px">{{ clientCount[record.id].deactive.length }}</a-tag>
+                <a-tag class="client-count-tag" style="margin: 0; padding: 0 2px">{{ clientCount[record.id].deactive.length }}</a-tag>
               </a-popover>
               <a-popover v-if="clientCount[record.id].depleted.length" :title="t('depleted')">
                 <template #content>
@@ -546,7 +597,7 @@ function showQrCodeMenu(dbInbound) {
                     <div v-for="email in clientCount[record.id].depleted" :key="email">{{ email }}</div>
                   </div>
                 </template>
-                <a-tag color="red" style="margin: 0; padding: 0 2px">{{ clientCount[record.id].depleted.length
+                <a-tag color="red" class="client-count-tag" style="margin: 0; padding: 0 2px">{{ clientCount[record.id].depleted.length
                 }}</a-tag>
               </a-popover>
               <a-popover v-if="clientCount[record.id].expiring.length" :title="t('depletingSoon')">
@@ -555,7 +606,7 @@ function showQrCodeMenu(dbInbound) {
                     <div v-for="email in clientCount[record.id].expiring" :key="email">{{ email }}</div>
                   </div>
                 </template>
-                <a-tag color="orange" style="margin: 0; padding: 0 2px">{{ clientCount[record.id].expiring.length
+                <a-tag color="orange" class="client-count-tag" style="margin: 0; padding: 0 2px">{{ clientCount[record.id].expiring.length
                 }}</a-tag>
               </a-popover>
               <a-popover v-if="clientCount[record.id].online.length" :title="t('online')">
@@ -564,7 +615,7 @@ function showQrCodeMenu(dbInbound) {
                     <div v-for="email in clientCount[record.id].online" :key="email">{{ email }}</div>
                   </div>
                 </template>
-                <a-tag color="blue" style="margin: 0; padding: 0 2px">{{ clientCount[record.id].online.length }}</a-tag>
+                <a-tag color="blue" class="client-count-tag" style="margin: 0; padding: 0 2px">{{ clientCount[record.id].online.length }}</a-tag>
               </a-popover>
             </template>
           </template>
@@ -630,13 +681,17 @@ function showQrCodeMenu(dbInbound) {
 }
 
 .filter-bar.mobile>* {
-  margin-bottom: 4px;
+    margin-bottom: 4px;
 }
 
 .protocol-tags {
   display: inline-flex;
   flex-wrap: wrap;
   gap: 4px;
+}
+
+.client-count-tag {
+  font-variant-numeric: tabular-nums;
 }
 
 .row-action-trigger {
