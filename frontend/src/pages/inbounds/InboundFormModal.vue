@@ -12,6 +12,7 @@ import {
   SizeFormatter,
   Wireguard,
 } from '@/utils';
+import { getRandomRealityTarget } from '@/models/reality-targets';
 import {
   Inbound,
   Protocols,
@@ -31,6 +32,7 @@ import {
 import { DBInbound } from '@/models/dbinbound.js';
 import FinalMaskForm from '@/components/FinalMaskForm.vue';
 import DateTimePicker from '@/components/DateTimePicker.vue';
+import JsonEditor from '@/components/JsonEditor.vue';
 import { useNodeList } from '@/composables/useNodeList.js';
 
 const { t } = useI18n();
@@ -68,7 +70,11 @@ const FLOW_OPTIONS = Object.values(TLS_FLOW_CONTROL);
 const inbound = ref(null);
 const dbForm = ref(null);
 const saving = ref(false);
-const advancedJson = ref({ stream: '', sniffing: '', settings: '' });
+const advancedStreamText = ref('');
+const advancedSniffingText = ref('');
+const advancedSettingsText = ref('');
+const activeTabKey = ref('basic');
+const advancedSectionKey = ref('all');
 // Cached default cert/key paths from /panel/setting/defaultSettings —
 // powers the "Set default cert" button on the TLS form.
 const defaultCert = ref('');
@@ -220,14 +226,19 @@ function freshDbForm() {
 
 function primeAdvancedJson() {
   if (!inbound.value) return;
+  // Only set stream text for protocols that support it
+  if (canEnableStream.value) {
+    try {
+      advancedStreamText.value = JSON.stringify(JSON.parse(inbound.value.stream.toString()), null, 2);
+    } catch (_e) { /* keep prior text */ }
+  } else {
+    advancedStreamText.value = '{}';
+  }
   try {
-    advancedJson.value.stream = JSON.stringify(JSON.parse(inbound.value.stream.toString()), null, 2);
+    advancedSniffingText.value = JSON.stringify(JSON.parse(inbound.value.sniffing.toString()), null, 2);
   } catch (_e) { /* keep prior text */ }
   try {
-    advancedJson.value.sniffing = JSON.stringify(JSON.parse(inbound.value.sniffing.toString()), null, 2);
-  } catch (_e) { /* keep prior text */ }
-  try {
-    advancedJson.value.settings = JSON.stringify(JSON.parse(inbound.value.settings.toString()), null, 2);
+    advancedSettingsText.value = JSON.stringify(JSON.parse(inbound.value.settings.toString()), null, 2);
   } catch (_e) { /* keep prior text */ }
 }
 
@@ -240,7 +251,59 @@ watch(() => props.open, (next) => {
     dbForm.value = freshDbForm();
     primeAdvancedJson();
   }
+  activeTabKey.value = 'basic';
+  advancedSectionKey.value = 'all';
   fetchDefaultCertSettings();
+});
+
+function applyAdvancedJsonToBasic() {
+  if (!inbound.value) return true;
+  let parsedSettings;
+  let parsedStream;
+  let parsedSniffing;
+  try {
+    parsedSettings = advancedSettingsText.value.trim()
+      ? JSON.parse(advancedSettingsText.value)
+      : inbound.value.settings?.toJson?.();
+  } catch (e) { message.error(`Settings JSON invalid: ${e.message}`); return false; }
+  try {
+    parsedStream = advancedStreamText.value.trim()
+      ? JSON.parse(advancedStreamText.value)
+      : inbound.value.stream?.toJson?.();
+  } catch (e) { message.error(`Stream JSON invalid: ${e.message}`); return false; }
+  try {
+    parsedSniffing = advancedSniffingText.value.trim()
+      ? JSON.parse(advancedSniffingText.value)
+      : inbound.value.sniffing?.toJson?.();
+  } catch (e) { message.error(`Sniffing JSON invalid: ${e.message}`); return false; }
+
+  try {
+    inbound.value = Inbound.fromJson({
+      port: inbound.value.port,
+      listen: inbound.value.listen,
+      protocol: inbound.value.protocol,
+      settings: parsedSettings,
+      streamSettings: parsedStream,
+      tag: inbound.value.tag,
+      sniffing: parsedSniffing,
+      clientStats: inbound.value.clientStats,
+    });
+  } catch (e) {
+    message.error(`Advanced JSON: ${e.message}`);
+    return false;
+  }
+  return true;
+}
+
+let isRevertingTab = false;
+watch(activeTabKey, (next, prev) => {
+  if (isRevertingTab) { isRevertingTab = false; return; }
+  if (prev === 'advanced' && next !== 'advanced') {
+    if (!applyAdvancedJsonToBasic()) {
+      isRevertingTab = true;
+      activeTabKey.value = 'advanced';
+    }
+  }
 });
 
 // In add mode, switching protocol restamps settings + re-syncs port.
@@ -269,6 +332,216 @@ function onNetworkChange(next) {
     inbound.value.stream.finalmask.udp = [];
   }
 }
+
+function parseAdvancedSliceOrFallback(rawText, fallbackValue) {
+  if (!rawText?.trim()) return fallbackValue;
+  return JSON.parse(rawText);
+}
+
+function unwrapWrappedObject(parsed, key) {
+  if (
+    parsed
+    && typeof parsed === 'object'
+    && !Array.isArray(parsed)
+    && parsed[key] !== undefined
+  ) {
+    return parsed[key];
+  }
+  return parsed;
+}
+
+const advancedAllConfig = computed({
+  get: () => {
+    if (!inbound.value) return '';
+    try {
+      const settings = parseAdvancedSliceOrFallback(
+        advancedSettingsText.value,
+        inbound.value.settings?.toJson?.() || {},
+      );
+      const streamSettings = parseAdvancedSliceOrFallback(
+        advancedStreamText.value,
+        inbound.value.stream?.toJson?.() || {},
+      );
+      const sniffing = parseAdvancedSliceOrFallback(
+        advancedSniffingText.value,
+        inbound.value.sniffing?.toJson?.() || {},
+      );
+
+      const result = {
+        listen: inbound.value.listen,
+        port: inbound.value.port,
+        protocol: inbound.value.protocol,
+        settings,
+        sniffing,
+        tag: inbound.value.tag,
+      };
+
+      // Only include streamSettings for protocols that support it
+      if (canEnableStream.value) {
+        result.streamSettings = streamSettings;
+      }
+
+      return JSON.stringify(result, null, 2);
+    } catch (_e) {
+      return '';
+    }
+  },
+  set: (next) => {
+    let parsed;
+    try {
+      parsed = JSON.parse(next);
+    } catch (e) {
+      message.error(`All JSON invalid: ${e.message}`);
+      return;
+    }
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      message.error('All JSON must be an inbound object.');
+      return;
+    }
+
+    try {
+      if (typeof parsed.listen === 'string') {
+        inbound.value.listen = parsed.listen;
+      }
+      if (parsed.port !== undefined) {
+        const parsedPort = Number(parsed.port);
+        if (!Number.isNaN(parsedPort) && Number.isFinite(parsedPort)) {
+          inbound.value.port = parsedPort;
+        }
+      }
+      if (typeof parsed.protocol === 'string' && PROTOCOLS.includes(parsed.protocol)) {
+        inbound.value.protocol = parsed.protocol;
+      }
+      if (typeof parsed.tag === 'string') {
+        inbound.value.tag = parsed.tag;
+      }
+
+      const existingSettings = parseAdvancedSliceOrFallback(
+        advancedSettingsText.value,
+        inbound.value?.settings?.toJson?.() || {},
+      );
+      const settings = parsed.settings ?? existingSettings;
+      const sniffing = parsed.sniffing ?? (inbound.value?.sniffing?.toJson?.() || {});
+      advancedSettingsText.value = JSON.stringify(settings, null, 2);
+      advancedSniffingText.value = JSON.stringify(sniffing, null, 2);
+
+      // Only update stream settings if protocol supports it
+      if (canEnableStream.value) {
+        const streamSettings = parsed.streamSettings ?? (inbound.value?.stream?.toJson?.() || {});
+        advancedStreamText.value = JSON.stringify(streamSettings, null, 2);
+      } else {
+        advancedStreamText.value = '{}';
+      }
+    } catch (e) {
+      message.error(`All JSON invalid: ${e.message}`);
+    }
+  },
+});
+
+const advancedSettingsConfig = computed({
+  get: () => {
+    if (!inbound.value) return '';
+    try {
+      const settings = parseAdvancedSliceOrFallback(
+        advancedSettingsText.value,
+        inbound.value.settings?.toJson?.() || {},
+      );
+      return JSON.stringify({
+        settings,
+      }, null, 2);
+    } catch (_e) {
+      return '';
+    }
+  },
+  set: (next) => {
+    let parsed;
+    try {
+      parsed = JSON.parse(next);
+    } catch (e) {
+      message.error(`Settings JSON invalid: ${e.message}`);
+      return;
+    }
+    const unwrapped = unwrapWrappedObject(parsed, 'settings');
+    if (!unwrapped || typeof unwrapped !== 'object' || Array.isArray(unwrapped)) {
+      message.error('Settings JSON must be an object or { settings: { ... } }.');
+      return;
+    }
+
+    try {
+      advancedSettingsText.value = JSON.stringify(unwrapped, null, 2);
+    } catch (e) {
+      message.error(`Settings JSON invalid: ${e.message}`);
+    }
+  },
+});
+
+const advancedSniffingConfig = computed({
+  get: () => {
+    if (!inbound.value) return '';
+    try {
+      const sniffing = parseAdvancedSliceOrFallback(
+        advancedSniffingText.value,
+        inbound.value.sniffing?.toJson?.() || {},
+      );
+      return JSON.stringify({ sniffing }, null, 2);
+    } catch (_e) {
+      return '';
+    }
+  },
+  set: (next) => {
+    let parsed;
+    try {
+      parsed = JSON.parse(next);
+    } catch (e) {
+      message.error(`Sniffing JSON invalid: ${e.message}`);
+      return;
+    }
+    const unwrapped = unwrapWrappedObject(parsed, 'sniffing');
+    if (!unwrapped || typeof unwrapped !== 'object' || Array.isArray(unwrapped)) {
+      message.error('Sniffing JSON must be an object or { sniffing: { ... } }.');
+      return;
+    }
+    try {
+      advancedSniffingText.value = JSON.stringify(unwrapped, null, 2);
+    } catch (e) {
+      message.error(`Sniffing JSON invalid: ${e.message}`);
+    }
+  },
+});
+
+const advancedStreamConfig = computed({
+  get: () => {
+    if (!inbound.value) return '';
+    try {
+      const streamSettings = parseAdvancedSliceOrFallback(
+        advancedStreamText.value,
+        inbound.value.stream?.toJson?.() || {},
+      );
+      return JSON.stringify({ streamSettings }, null, 2);
+    } catch (_e) {
+      return '';
+    }
+  },
+  set: (next) => {
+    let parsed;
+    try {
+      parsed = JSON.parse(next);
+    } catch (e) {
+      message.error(`Stream JSON invalid: ${e.message}`);
+      return;
+    }
+    const unwrapped = unwrapWrappedObject(parsed, 'streamSettings');
+    if (!unwrapped || typeof unwrapped !== 'object' || Array.isArray(unwrapped)) {
+      message.error('Stream JSON must be an object or { streamSettings: { ... } }.');
+      return;
+    }
+    try {
+      advancedStreamText.value = JSON.stringify(unwrapped, null, 2);
+    } catch (e) {
+      message.error(`Stream JSON invalid: ${e.message}`);
+    }
+  },
+});
 
 // === Random helpers wired to the form's sync icons ==================
 function randomEmail(target) {
@@ -339,11 +612,9 @@ function clearMldsa65() {
   inbound.value.stream.reality.settings.mldsa65Verify = '';
 }
 
-// Reality target/SNI randomizer — only available if the helper is loaded
 function randomizeRealityTarget() {
   if (!inbound.value?.stream?.reality) return;
-  if (typeof window.getRandomRealityTarget !== 'function') return;
-  const t = window.getRandomRealityTarget();
+  const t = getRandomRealityTarget();
   inbound.value.stream.reality.target = t.target;
   inbound.value.stream.reality.serverNames = t.sni;
 }
@@ -473,16 +744,16 @@ async function submit() {
     let settings;
     try {
       streamSettings = canEnableStream.value
-        ? JSON.stringify(JSON.parse(advancedJson.value.stream))
+        ? JSON.stringify(JSON.parse(advancedStreamText.value))
         : (inbound.value.stream?.sockopt
           ? JSON.stringify({ sockopt: inbound.value.stream.sockopt.toJson() })
           : '');
     } catch (e) { message.error(`Stream JSON invalid: ${e.message}`); return; }
     try {
-      sniffing = JSON.stringify(JSON.parse(advancedJson.value.sniffing || inbound.value.sniffing.toString()));
+      sniffing = JSON.stringify(JSON.parse(advancedSniffingText.value || inbound.value.sniffing.toString()));
     } catch (e) { message.error(`Sniffing JSON invalid: ${e.message}`); return; }
     try {
-      settings = JSON.stringify(JSON.parse(advancedJson.value.settings || inbound.value.settings.toString()));
+      settings = JSON.stringify(JSON.parse(advancedSettingsText.value || inbound.value.settings.toString()));
     } catch (e) { message.error(`Settings JSON invalid: ${e.message}`); return; }
 
     // The structured form mutates `inbound.stream` directly when the
@@ -545,8 +816,13 @@ watch(
   () => inbound.value && JSON.stringify(inbound.value.stream?.toJson?.() || {}),
   () => {
     if (!inbound.value?.stream) return;
+    // Only update stream text for protocols that support it
+    if (!canEnableStream.value) {
+      advancedStreamText.value = '{}';
+      return;
+    }
     try {
-      advancedJson.value.stream = JSON.stringify(JSON.parse(inbound.value.stream.toString()), null, 2);
+      advancedStreamText.value = JSON.stringify(JSON.parse(inbound.value.stream.toString()), null, 2);
     } catch (_e) { /* leave as is */ }
   },
 );
@@ -555,7 +831,7 @@ watch(
   () => {
     if (!inbound.value?.sniffing) return;
     try {
-      advancedJson.value.sniffing = JSON.stringify(JSON.parse(inbound.value.sniffing.toString()), null, 2);
+      advancedSniffingText.value = JSON.stringify(JSON.parse(inbound.value.sniffing.toString()), null, 2);
     } catch (_e) { /* leave as is */ }
   },
 );
@@ -564,8 +840,19 @@ watch(
   () => {
     if (!inbound.value?.settings) return;
     try {
-      advancedJson.value.settings = JSON.stringify(JSON.parse(inbound.value.settings.toString()), null, 2);
+      advancedSettingsText.value = JSON.stringify(JSON.parse(inbound.value.settings.toString()), null, 2);
     } catch (_e) { /* leave as is */ }
+  },
+);
+
+// Watch protocol changes to clear stream settings for protocols that don't support it
+watch(
+  () => inbound.value?.protocol,
+  () => {
+    if (!inbound.value) return;
+    if (!canEnableStream.value) {
+      advancedStreamText.value = '{}';
+    }
   },
 );
 </script>
@@ -573,7 +860,7 @@ watch(
 <template>
   <a-modal :open="open" :title="title" :ok-text="okText" :cancel-text="t('close')" :confirm-loading="saving"
     :mask-closable="false" width="780px" @ok="submit" @cancel="close">
-    <a-tabs v-if="inbound && dbForm" default-active-key="basic">
+    <a-tabs v-if="inbound && dbForm" v-model:active-key="activeTabKey">
       <!-- ============================== BASICS ============================== -->
       <a-tab-pane key="basic" :tab="t('pages.xray.basicTemplate')">
         <a-form :colon="false" :label-col="{ sm: { span: 8 } }" :wrapper-col="{ sm: { span: 14 } }">
@@ -583,7 +870,7 @@ watch(
           <a-form-item :label="t('pages.inbounds.remark')">
             <a-input v-model:value="dbForm.remark" />
           </a-form-item>
-          <a-form-item :label="t('pages.inbounds.deployTo')">
+          <a-form-item v-if="selectableNodes.length > 0" :label="t('pages.inbounds.deployTo')">
             <a-select v-model:value="dbForm.nodeId" :disabled="mode === 'edit'"
               :placeholder="t('pages.inbounds.localPanel')" allow-clear>
               <a-select-option :value="null">{{ t('pages.inbounds.localPanel') }}</a-select-option>
@@ -628,10 +915,7 @@ watch(
       </a-tab-pane>
 
       <!-- ============================== PROTOCOL ============================== -->
-      <!-- TUN has no per-protocol form yet (interface/mtu/gateway live in
-           settings JSON), so the tab would render empty — hide it until
-           a TUN form is added. -->
-      <a-tab-pane v-if="protocol !== Protocols.TUN" key="protocol" :tab="t('pages.inbounds.protocol')">
+      <a-tab-pane key="protocol" :tab="t('pages.inbounds.protocol')">
         <!-- Multi-user inbounds: in add mode embed the first client form,
              in edit mode show a count summary. -->
         <template v-if="isMultiUser">
@@ -844,21 +1128,123 @@ watch(
         <!-- Tunnel -->
         <a-form v-if="protocol === Protocols.TUNNEL" :colon="false" :label-col="{ sm: { span: 8 } }"
           :wrapper-col="{ sm: { span: 14 } }" class="mt-12">
-          <a-form-item label="Address">
-            <a-input v-model:value="inbound.settings.address" />
+          <a-form-item label="Rewrite address">
+            <a-input v-model:value="inbound.settings.rewriteAddress" />
           </a-form-item>
-          <a-form-item label="Destination port">
-            <a-input-number v-model:value="inbound.settings.port" :min="1" :max="65535" />
+          <a-form-item label="Rewrite port">
+            <a-input-number v-model:value="inbound.settings.rewritePort" :min="0" :max="65535" />
           </a-form-item>
-          <a-form-item label="Network">
-            <a-select v-model:value="inbound.settings.network">
+          <a-form-item label="Allowed network">
+            <a-select v-model:value="inbound.settings.allowedNetwork">
               <a-select-option value="tcp,udp">TCP, UDP</a-select-option>
               <a-select-option value="tcp">TCP</a-select-option>
               <a-select-option value="udp">UDP</a-select-option>
             </a-select>
           </a-form-item>
+          <a-form-item label="Port map">
+            <a-button size="small" @click="inbound.settings.addPortMap('', '')">
+              <template #icon>
+                <PlusOutlined />
+              </template>
+            </a-button>
+          </a-form-item>
+          <a-form-item v-if="inbound.settings.portMap.length > 0" :wrapper-col="{ span: 24 }">
+            <a-input-group v-for="(pm, idx) in inbound.settings.portMap" :key="`pm-${idx}`" compact class="mb-8">
+              <a-input :style="{ width: '30%' }" v-model:value="pm.name" placeholder="5555">
+                <template #addonBefore>{{ idx + 1 }}</template>
+              </a-input>
+              <a-input :style="{ width: '60%' }" v-model:value="pm.value" placeholder="1.1.1.1:7777" />
+              <a-button @click="inbound.settings.removePortMap(idx)">
+                <template #icon>
+                  <MinusOutlined />
+                </template>
+              </a-button>
+            </a-input-group>
+          </a-form-item>
           <a-form-item label="Follow redirect">
             <a-switch v-model:checked="inbound.settings.followRedirect" />
+          </a-form-item>
+        </a-form>
+
+        <!-- TUN -->
+        <a-form v-if="protocol === Protocols.TUN" :colon="false" :label-col="{ sm: { span: 8 } }"
+          :wrapper-col="{ sm: { span: 14 } }" class="mt-12">
+          <a-form-item label="Interface name">
+            <a-input v-model:value="inbound.settings.name" placeholder="xray0" />
+          </a-form-item>
+          <a-form-item label="MTU">
+            <a-input-number v-model:value="inbound.settings.mtu" :min="0" />
+          </a-form-item>
+          <a-form-item label="Gateway">
+            <a-button size="small" @click="inbound.settings.gateway.push('')">
+              <template #icon>
+                <PlusOutlined />
+              </template>
+            </a-button>
+            <a-input v-for="(_ip, j) in inbound.settings.gateway" :key="`tun-gw-${j}`"
+              v-model:value="inbound.settings.gateway[j]" class="mt-4"
+              :placeholder="j === 0 ? '10.0.0.1/16' : 'fc00::1/64'">
+              <template #addonAfter>
+                <a-button size="small" @click="inbound.settings.gateway.splice(j, 1)">
+                  <template #icon>
+                    <MinusOutlined />
+                  </template>
+                </a-button>
+              </template>
+            </a-input>
+          </a-form-item>
+          <a-form-item label="DNS">
+            <a-button size="small" @click="inbound.settings.dns.push('')">
+              <template #icon>
+                <PlusOutlined />
+              </template>
+            </a-button>
+            <a-input v-for="(_ip, j) in inbound.settings.dns" :key="`tun-dns-${j}`"
+              v-model:value="inbound.settings.dns[j]" class="mt-4" :placeholder="j === 0 ? '1.1.1.1' : '8.8.8.8'">
+              <template #addonAfter>
+                <a-button size="small" @click="inbound.settings.dns.splice(j, 1)">
+                  <template #icon>
+                    <MinusOutlined />
+                  </template>
+                </a-button>
+              </template>
+            </a-input>
+          </a-form-item>
+          <a-form-item label="User level">
+            <a-input-number v-model:value="inbound.settings.userLevel" :min="0" />
+          </a-form-item>
+          <a-form-item>
+            <template #label>
+              <a-tooltip
+                title="Windows-only. CIDRs added to the system routing table automatically so matching traffic goes through TUN.">
+                Auto system routes
+              </a-tooltip>
+            </template>
+            <a-button size="small" @click="inbound.settings.autoSystemRoutingTable.push('')">
+              <template #icon>
+                <PlusOutlined />
+              </template>
+            </a-button>
+            <a-input v-for="(_ip, j) in inbound.settings.autoSystemRoutingTable" :key="`tun-rt-${j}`"
+              v-model:value="inbound.settings.autoSystemRoutingTable[j]" class="mt-4"
+              :placeholder="j === 0 ? '0.0.0.0/0' : '::/0'">
+              <template #addonAfter>
+                <a-button size="small" @click="inbound.settings.autoSystemRoutingTable.splice(j, 1)">
+                  <template #icon>
+                    <MinusOutlined />
+                  </template>
+                </a-button>
+              </template>
+            </a-input>
+          </a-form-item>
+          <a-form-item>
+            <template #label>
+              <a-tooltip
+                title="Physical interface for outbound traffic. Use 'auto' to detect; auto-enabled when Auto system routes is set.">
+                Auto outbounds interface
+              </a-tooltip>
+            </template>
+            <a-input v-model:value="inbound.settings.autoOutboundsInterface" placeholder="auto" />
           </a-form-item>
         </a-form>
 
@@ -1672,9 +2058,25 @@ watch(
             </a-form-item>
           </template>
 
-          <!-- ====== Hysteria Masquerade ====== -->
-          <!-- Per https://xtls.github.io/config/transports/hysteria.html#masqobject -->
+          <!-- ====== Hysteria stream settings ====== -->
+          <!-- Per https://xtls.github.io/config/transports/hysteria.html -->
           <template v-if="protocol === Protocols.HYSTERIA">
+            <a-form-item>
+              <template #label>
+                <a-tooltip title="Hysteria protocol version. Currently must be 2.">
+                  Version
+                </a-tooltip>
+              </template>
+              <a-input-number v-model:value="inbound.stream.hysteria.version" :min="2" :max="2" />
+            </a-form-item>
+            <a-form-item>
+              <template #label>
+                <a-tooltip title="Idle timeout (seconds) for a single QUIC native UDP connection.">
+                  UDP idle timeout
+                </a-tooltip>
+              </template>
+              <a-input-number v-model:value="inbound.stream.hysteria.udpIdleTimeout" :min="0" />
+            </a-form-item>
             <a-form-item label="Masquerade">
               <a-switch v-model:checked="inbound.stream.hysteria.masqueradeSwitch" />
             </a-form-item>
@@ -1777,23 +2179,48 @@ watch(
 
       <!-- ============================== ADVANCED ============================== -->
       <a-tab-pane key="advanced" :tab="t('pages.xray.advancedTemplate')">
-        <a-alert type="info" show-icon
-          message="Edit raw stream JSON to access advanced fields we don't yet expose through the form."
-          class="mb-12" />
-        <a-form layout="vertical">
-          <a-form-item label="settings (clients, encryption, fallbacks, …)">
-            <a-textarea v-model:value="advancedJson.settings" :auto-size="{ minRows: 10, maxRows: 24 }"
-              spellcheck="false" class="json-editor" />
-          </a-form-item>
-          <a-form-item label="streamSettings">
-            <a-textarea v-model:value="advancedJson.stream" :auto-size="{ minRows: 10, maxRows: 24 }" spellcheck="false"
-              class="json-editor" />
-          </a-form-item>
-          <a-form-item label="sniffing (overrides the Sniffing tab when set)">
-            <a-textarea v-model:value="advancedJson.sniffing" :auto-size="{ minRows: 6, maxRows: 16 }"
-              spellcheck="false" class="json-editor" />
-          </a-form-item>
-        </a-form>
+        <div class="advanced-shell">
+          <div class="advanced-panel">
+            <div class="advanced-panel__header">
+              <div>
+                <div class="advanced-panel__title">Inbound JSON sections</div>
+                <div class="advanced-panel__subtitle">
+                  Full inbound JSON and focused editors for settings, sniffing, and streamSettings.
+                </div>
+              </div>
+            </div>
+
+            <a-tabs v-model:active-key="advancedSectionKey" class="advanced-inner-tabs">
+              <a-tab-pane key="all" tab="All">
+                <div class="advanced-editor-meta">
+                  Full inbound object with all fields in one editor.
+                </div>
+                <JsonEditor v-model:value="advancedAllConfig" min-height="340px" max-height="560px" />
+              </a-tab-pane>
+              <a-tab-pane key="settings" tab="Settings">
+                <div class="advanced-editor-meta">
+                  Xray settings block wrapper:
+                  <code>{ settings: { ... } }</code>.
+                </div>
+                <JsonEditor v-model:value="advancedSettingsConfig" min-height="320px" max-height="540px" />
+              </a-tab-pane>
+              <a-tab-pane key="sniffingSection" tab="Sniffing">
+                <div class="advanced-editor-meta">
+                  Xray sniffing block wrapper:
+                  <code>{ sniffing: { ... } }</code>.
+                </div>
+                <JsonEditor v-model:value="advancedSniffingConfig" min-height="240px" max-height="420px" />
+              </a-tab-pane>
+              <a-tab-pane v-if="canEnableStream" key="streamSection" tab="Stream">
+                <div class="advanced-editor-meta">
+                  Xray stream block wrapper:
+                  <code>{ streamSettings: { ... } }</code>.
+                </div>
+                <JsonEditor v-model:value="advancedStreamConfig" min-height="320px" max-height="540px" />
+              </a-tab-pane>
+            </a-tabs>
+          </div>
+        </div>
       </a-tab-pane>
     </a-tabs>
   </a-modal>
@@ -1841,11 +2268,6 @@ watch(
   margin-top: 6px;
 }
 
-.json-editor {
-  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
-  font-size: 12px;
-}
-
 .client-summary {
   width: 100%;
   border-collapse: collapse;
@@ -1872,6 +2294,73 @@ watch(
 
 .wg-peer {
   margin-top: 4px;
+}
+
+.advanced-shell {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.advanced-panel {
+  padding: 14px;
+  border: 1px solid rgba(128, 128, 128, 0.18);
+  border-radius: 12px;
+  background: rgba(128, 128, 128, 0.04);
+}
+
+.advanced-panel__header {
+  margin-bottom: 12px;
+}
+
+.advanced-panel__title {
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 1.4;
+}
+
+.advanced-panel__subtitle {
+  margin-top: 4px;
+  color: rgba(0, 0, 0, 0.6);
+  line-height: 1.5;
+}
+
+.advanced-inner-tabs :deep(.ant-tabs-nav) {
+  margin-bottom: 12px;
+}
+
+.advanced-inner-tabs :deep(.ant-tabs-tab) {
+  padding-inline: 14px;
+}
+
+.advanced-editor-meta {
+  margin-bottom: 10px;
+  color: rgba(0, 0, 0, 0.65);
+  line-height: 1.5;
+}
+
+@media (max-width: 768px) {
+  .advanced-panel {
+    padding: 12px;
+    border-radius: 10px;
+  }
+
+  .advanced-inner-tabs :deep(.ant-tabs-tab) {
+    padding-inline: 10px;
+  }
+}
+
+:global(.dark) .advanced-panel__subtitle,
+:global(.dark) .advanced-editor-meta,
+:global(.ultra) .advanced-panel__subtitle,
+:global(.ultra) .advanced-editor-meta {
+  color: rgba(255, 255, 255, 0.65);
+}
+
+:global(.dark) .advanced-panel,
+:global(.ultra) .advanced-panel {
+  border-color: rgba(255, 255, 255, 0.12);
+  background: rgba(255, 255, 255, 0.03);
 }
 
 .section-heading {

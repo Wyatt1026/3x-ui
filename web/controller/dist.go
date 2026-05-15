@@ -56,8 +56,13 @@ func serveDistPage(c *gin.Context, name string) {
 		csrfToken = ""
 	}
 	csrfMeta := []byte(`<meta name="csrf-token" content="` + htmlpkg.EscapeString(csrfToken) + `">`)
+	basePathMeta := []byte(`<meta name="base-path" content="` + htmlpkg.EscapeString(basePath) + `">`)
 
-	script := `<script>window.X_UI_BASE_PATH="` + escapedBase + `"`
+	nonceAttr := ""
+	if nonce := c.GetString("csp_nonce"); nonce != "" {
+		nonceAttr = ` nonce="` + htmlpkg.EscapeString(nonce) + `"`
+	}
+	script := `<script` + nonceAttr + `>window.X_UI_BASE_PATH="` + escapedBase + `"`
 	if name != "login.html" {
 		escapedVer := jsEscape.Replace(config.GetVersion())
 		script += `;window.X_UI_CUR_VER="` + escapedVer + `"`
@@ -65,6 +70,7 @@ func serveDistPage(c *gin.Context, name string) {
 	script += `;</script>`
 	inject := []byte(script)
 	inject = append(inject, csrfMeta...)
+	inject = append(inject, basePathMeta...)
 	inject = append(inject, []byte(`</head>`)...)
 	out := bytes.Replace(body, []byte("</head>"), inject, 1)
 

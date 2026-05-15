@@ -25,7 +25,7 @@ export function safeInlineHtml(input) {
 
 export const sections = [
   {
-    id: 'auth',
+    id: 'authentication',
     title: 'Authentication',
     description:
       'Two authentication modes are supported. UI sessions use a cookie set by the login endpoint. Programmatic clients (bots, scripts, remote panels) authenticate with a Bearer token taken from Settings → Security → API Token. Both work for every endpoint under /panel/api/*.',
@@ -46,9 +46,10 @@ export const sections = [
           '{\n  "success": false,\n  "msg": "Wrong username or password"\n}',
       },
       {
-        method: 'GET',
+        method: 'POST',
         path: '/logout',
-        summary: 'Clear the session cookie. Redirects back to the login page; not useful from non-browser clients.',
+        summary: 'Clear the session cookie. Requires the CSRF header for browser sessions.',
+        response: '{\n  "success": true\n}',
       },
       {
         method: 'GET',
@@ -68,9 +69,9 @@ export const sections = [
 
   {
     id: 'inbounds',
-    title: 'Inbounds API',
+    title: 'Inbounds',
     description:
-      'Manage inbound configurations and their clients. All endpoints live under /panel/api/inbounds and require a logged-in session or Bearer token. Link-generating endpoints honour X-Forwarded-Host / X-Forwarded-Proto, so callers behind a reverse proxy get the correct external host in returned URLs.',
+      'Manage inbound configurations and their clients. All endpoints live under /panel/api/inbounds and require a logged-in session or Bearer token. Link-generating endpoints honour forwarded headers only when the request comes from a configured trusted proxy.',
     endpoints: [
       {
         method: 'GET',
@@ -194,6 +195,14 @@ export const sections = [
       },
       {
         method: 'POST',
+        path: '/panel/api/inbounds/:id/resetTraffic',
+        summary: 'Zero out upload + download counters for a single inbound. Does not touch per-client counters.',
+        params: [
+          { name: 'id', in: 'path', type: 'number', desc: 'Inbound ID.' },
+        ],
+      },
+      {
+        method: 'POST',
         path: '/panel/api/inbounds/:id/resetClientTraffic/:email',
         summary: 'Zero out upload + download counters for one client.',
         params: [
@@ -288,7 +297,7 @@ export const sections = [
 
   {
     id: 'server',
-    title: 'Server API',
+    title: 'Server',
     description:
       'System status, log retrieval, certificate generators, Xray binary management, and backup/restore. All under /panel/api/server.',
     endpoints: [
@@ -487,7 +496,7 @@ export const sections = [
 
   {
     id: 'nodes',
-    title: 'Nodes API',
+    title: 'Nodes',
     description:
       'Manage remote 3x-ui panels acting as nodes for a central panel. All endpoints under /panel/api/nodes.',
     endpoints: [
@@ -567,8 +576,8 @@ export const sections = [
   },
 
   {
-    id: 'customGeo',
-    title: 'Custom Geo API',
+    id: 'custom-geo',
+    title: 'Custom Geo',
     description:
       'Manage user-supplied GeoIP / GeoSite source files. All endpoints under /panel/api/custom-geo.',
     endpoints: [
@@ -627,7 +636,7 @@ export const sections = [
     description: 'Operations that interact with the configured Telegram bot.',
     endpoints: [
       {
-        method: 'GET',
+        method: 'POST',
         path: '/panel/api/backuptotgbot',
         summary: 'Send a fresh DB backup to every Telegram chat configured as an admin recipient. No body, no params.',
       },
@@ -636,9 +645,9 @@ export const sections = [
 
   {
     id: 'settings',
-    title: 'Settings API',
+    title: 'Settings',
     description:
-      'Panel configuration, user credentials, and API token management. All endpoints live under /panel/setting and require a logged-in session or Bearer token.',
+      'Panel configuration and user credentials. All endpoints live under /panel/setting and require a logged-in session or Bearer token.',
     endpoints: [
       {
         method: 'POST',
@@ -679,24 +688,58 @@ export const sections = [
         path: '/panel/setting/getDefaultJsonConfig',
         summary: 'Return the built-in default Xray JSON config template that ships with this panel version.',
       },
+    ],
+  },
+
+  {
+    id: 'api-tokens',
+    title: 'API Tokens',
+    description:
+      'Manage Bearer tokens used for programmatic auth (bots, central panels acting on this node, CI). Each token has a unique name and an enabled flag — disable to revoke without deleting, delete to revoke permanently. Tokens are stored plaintext so the SPA can show them on demand. Send one as <code>Authorization: Bearer &lt;token&gt;</code> on any /panel/api/* request.',
+    endpoints: [
       {
         method: 'GET',
-        path: '/panel/setting/getApiToken',
-        summary: 'Return the current API Bearer token. The token is auto-generated on first read so existing installs upgrade transparently.',
-        response: '{\n  "success": true,\n  "obj": "abcdef-12345-..."\n}',
+        path: '/panel/setting/apiTokens',
+        summary: 'List every API token, enabled or not.',
+        response: '{\n  "success": true,\n  "obj": [\n    {\n      "id": 1,\n      "name": "default",\n      "token": "abcdef-12345-...",\n      "enabled": true,\n      "createdAt": 1736000000\n    }\n  ]\n}',
       },
       {
         method: 'POST',
-        path: '/panel/setting/regenerateApiToken',
-        summary: 'Rotate the API Bearer token. Any remote central panel that cached the old value will start failing heartbeats until updated with the new token.',
-        response: '{\n  "success": true,\n  "obj": "new-token-string"\n}',
+        path: '/panel/setting/apiTokens/create',
+        summary: 'Mint a new API token. Name must be unique and 1-64 characters; the token string is server-generated.',
+        params: [
+          { name: 'name', in: 'body', type: 'string', desc: 'Human-readable label, e.g. "central-panel-a".' },
+        ],
+        body: '{\n  "name": "central-panel-a"\n}',
+        response: '{\n  "success": true,\n  "obj": {\n    "id": 2,\n    "name": "central-panel-a",\n    "token": "new-token-string",\n    "enabled": true,\n    "createdAt": 1736000000\n  }\n}',
+        errorResponse: '{\n  "success": false,\n  "msg": "a token with that name already exists"\n}',
+      },
+      {
+        method: 'POST',
+        path: '/panel/setting/apiTokens/delete/:id',
+        summary: 'Permanently delete a token. Any caller using it stops authenticating immediately.',
+        params: [
+          { name: 'id', in: 'path', type: 'number', desc: 'Token row ID.' },
+        ],
+        response: '{\n  "success": true\n}',
+      },
+      {
+        method: 'POST',
+        path: '/panel/setting/apiTokens/setEnabled/:id',
+        summary: 'Toggle a token enabled/disabled without deleting it. Disabled tokens are rejected by checkAPIAuth on the next request.',
+        params: [
+          { name: 'id', in: 'path', type: 'number', desc: 'Token row ID.' },
+          { name: 'enabled', in: 'body', type: 'boolean', desc: 'New enabled state.' },
+        ],
+        body: '{\n  "enabled": false\n}',
+        response: '{\n  "success": true\n}',
       },
     ],
   },
 
   {
-    id: 'xraySettings',
-    title: 'Xray Settings API',
+    id: 'xray-settings',
+    title: 'Xray Settings',
     description:
       'Xray configuration template, outbound management, Warp/Nord integration, and config testing. All endpoints under /panel/xray.',
     endpoints: [
@@ -704,7 +747,7 @@ export const sections = [
         method: 'POST',
         path: '/panel/xray/',
         summary: 'Return the Xray config template (JSON string), available inbound tags, client reverse tags, and the configured outbound test URL in one response.',
-        response: '{\n  "success": true,\n  "obj": {\n    "xraySetting": "{...raw xray config...}",\n    "inboundTags": "[\"inbound-443\"]",\n    "clientReverseTags": "[]",\n    "outboundTestUrl": "https://www.google.com/generate_204"\n  }\n}',
+        response: '{\n  "success": true,\n  "obj": {\n    "xraySetting": "{...raw xray config...}",\n    "inboundTags": "[\\"inbound-443\\"]",\n    "clientReverseTags": "[]",\n    "outboundTestUrl": "https://www.google.com/generate_204"\n  }\n}',
       },
       {
         method: 'GET',
