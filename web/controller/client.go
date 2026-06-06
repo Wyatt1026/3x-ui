@@ -3,6 +3,8 @@ package controller
 import (
 	"encoding/json"
 	"fmt"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/mhsanaei/3x-ui/v3/database/model"
@@ -14,6 +16,21 @@ import (
 
 func notifyClientsChanged() {
 	websocket.BroadcastInvalidate(websocket.MessageTypeClients)
+}
+
+func parseInboundIdsQuery(raw string) []int {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil
+	}
+	parts := strings.Split(raw, ",")
+	ids := make([]int, 0, len(parts))
+	for _, p := range parts {
+		if id, err := strconv.Atoi(strings.TrimSpace(p)); err == nil {
+			ids = append(ids, id)
+		}
+	}
+	return ids
 }
 
 type ClientController struct {
@@ -55,6 +72,8 @@ func (a *ClientController) initRouter(g *gin.RouterGroup) {
 	g.POST("/ips/:email", a.getIps)
 	g.POST("/clearIps/:email", a.clearIps)
 	g.POST("/onlines", a.onlines)
+	g.POST("/onlinesByGuid", a.onlinesByGuid)
+	g.POST("/activeInbounds", a.activeInbounds)
 	g.POST("/lastOnline", a.lastOnline)
 }
 
@@ -93,6 +112,12 @@ func (a *ClientController) get(c *gin.Context) {
 		jsonMsg(c, I18nWeb(c, "get"), err)
 		return
 	}
+	flow, err := a.clientService.EffectiveFlow(nil, rec.Id)
+	if err != nil {
+		jsonMsg(c, I18nWeb(c, "get"), err)
+		return
+	}
+	rec.Flow = flow
 	jsonObj(c, gin.H{"client": rec, "inboundIds": inboundIds}, nil)
 }
 
@@ -107,7 +132,7 @@ func (a *ClientController) create(c *gin.Context) {
 		jsonMsg(c, I18nWeb(c, "somethingWentWrong"), err)
 		return
 	}
-	jsonMsg(c, I18nWeb(c, "pages.inbounds.toasts.inboundClientAddSuccess"), nil)
+	jsonMsgObj(c, I18nWeb(c, "pages.inbounds.toasts.inboundClientAddSuccess"), pendingNodeObj(a.inboundService.AnyNodePending(payload.InboundIds)), nil)
 	if needRestart {
 		a.xrayService.SetToNeedRestart()
 	}
@@ -121,12 +146,13 @@ func (a *ClientController) update(c *gin.Context) {
 		jsonMsg(c, I18nWeb(c, "somethingWentWrong"), err)
 		return
 	}
-	needRestart, err := a.clientService.UpdateByEmail(&a.inboundService, email, updated)
+	inboundFilter := parseInboundIdsQuery(c.Query("inboundIds"))
+	needRestart, err := a.clientService.UpdateByEmail(&a.inboundService, email, updated, inboundFilter...)
 	if err != nil {
 		jsonMsg(c, I18nWeb(c, "somethingWentWrong"), err)
 		return
 	}
-	jsonMsg(c, I18nWeb(c, "pages.inbounds.toasts.inboundClientUpdateSuccess"), nil)
+	jsonMsgObj(c, I18nWeb(c, "pages.inbounds.toasts.inboundClientUpdateSuccess"), pendingNodeObj(a.clientService.HasPendingNode(&a.inboundService, email)), nil)
 	if needRestart {
 		a.xrayService.SetToNeedRestart()
 	}
@@ -164,7 +190,7 @@ func (a *ClientController) attach(c *gin.Context) {
 		jsonMsg(c, I18nWeb(c, "somethingWentWrong"), err)
 		return
 	}
-	jsonMsg(c, I18nWeb(c, "pages.inbounds.toasts.inboundClientAddSuccess"), nil)
+	jsonMsgObj(c, I18nWeb(c, "pages.inbounds.toasts.inboundClientAddSuccess"), pendingNodeObj(a.inboundService.AnyNodePending(body.InboundIds)), nil)
 	if needRestart {
 		a.xrayService.SetToNeedRestart()
 	}
@@ -391,6 +417,14 @@ func (a *ClientController) onlines(c *gin.Context) {
 	jsonObj(c, a.inboundService.GetOnlineClients(), nil)
 }
 
+func (a *ClientController) onlinesByGuid(c *gin.Context) {
+	jsonObj(c, a.inboundService.GetOnlineClientsByGuid(), nil)
+}
+
+func (a *ClientController) activeInbounds(c *gin.Context) {
+	jsonObj(c, a.inboundService.GetActiveInboundsByGuid(), nil)
+}
+
 func (a *ClientController) lastOnline(c *gin.Context) {
 	data, err := a.inboundService.GetClientsLastOnline()
 	jsonObj(c, data, err)
@@ -436,7 +470,7 @@ func (a *ClientController) detach(c *gin.Context) {
 		jsonMsg(c, I18nWeb(c, "somethingWentWrong"), err)
 		return
 	}
-	jsonMsg(c, I18nWeb(c, "pages.inbounds.toasts.inboundClientDeleteSuccess"), nil)
+	jsonMsgObj(c, I18nWeb(c, "pages.inbounds.toasts.inboundClientDeleteSuccess"), pendingNodeObj(a.inboundService.AnyNodePending(body.InboundIds)), nil)
 	if needRestart {
 		a.xrayService.SetToNeedRestart()
 	}

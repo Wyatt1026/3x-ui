@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/mhsanaei/3x-ui/v3/database"
 	"github.com/mhsanaei/3x-ui/v3/database/model"
 	"github.com/mhsanaei/3x-ui/v3/logger"
@@ -34,6 +35,7 @@ var defaultValueMap = map[string]string{
 	"webCertFile":                 "",
 	"webKeyFile":                  "",
 	"secret":                      random.Seq(32),
+	"panelGuid":                   uuid.NewString(),
 	"apiToken":                    "",
 	"webBasePath":                 "/",
 	"sessionMaxAge":               "360",
@@ -61,7 +63,7 @@ var defaultValueMap = map[string]string{
 	"subSupportUrl":               "",
 	"subProfileUrl":               "",
 	"subAnnounce":                 "",
-	"subEnableRouting":            "true",
+	"subEnableRouting":            "false",
 	"subRoutingRules":             "",
 	"subListen":                   "",
 	"subPort":                     "2096",
@@ -76,13 +78,14 @@ var defaultValueMap = map[string]string{
 	"subURI":                      "",
 	"subJsonPath":                 "/json/",
 	"subJsonURI":                  "",
-	"subClashEnable":              "true",
+	"subClashEnable":              "false",
 	"subClashPath":                "/clash/",
 	"subClashURI":                 "",
-	"subJsonFragment":             "",
-	"subJsonNoises":               "",
+	"subClashEnableRouting":       "false",
+	"subClashRules":               "",
 	"subJsonMux":                  "",
 	"subJsonRules":                "",
+	"subJsonFinalMask":            "",
 	"datepicker":                  "gregorian",
 	"warp":                        "",
 	"nord":                        "",
@@ -166,7 +169,7 @@ func (s *SettingService) GetAllSetting() (*entity.AllSetting, error) {
 		fieldV := v.FieldByName(field.Name)
 		switch t := fieldV.Interface().(type) {
 		case int:
-			n, err := strconv.ParseInt(value, 10, 64)
+			n, err := strconv.ParseInt(effectiveSettingValue(key, value), 10, 64)
 			if err != nil {
 				return err
 			}
@@ -174,7 +177,7 @@ func (s *SettingService) GetAllSetting() (*entity.AllSetting, error) {
 		case string:
 			fieldV.SetString(value)
 		case bool:
-			fieldV.SetBool(value == "true")
+			fieldV.SetBool(effectiveSettingValue(key, value) == "true")
 		default:
 			return common.NewErrorf("unknown field %v type %v", key, t)
 		}
@@ -286,12 +289,21 @@ func (s *SettingService) setString(key string, value string) error {
 	return s.saveSetting(key, value)
 }
 
+func effectiveSettingValue(key, stored string) string {
+	if stored == "" {
+		if def, ok := defaultValueMap[key]; ok {
+			return def
+		}
+	}
+	return stored
+}
+
 func (s *SettingService) getBool(key string) (bool, error) {
 	str, err := s.getString(key)
 	if err != nil {
 		return false, err
 	}
-	return strconv.ParseBool(str)
+	return strconv.ParseBool(effectiveSettingValue(key, str))
 }
 
 func (s *SettingService) setBool(key string, value bool) error {
@@ -303,7 +315,7 @@ func (s *SettingService) getInt(key string) (int, error) {
 	if err != nil {
 		return 0, err
 	}
-	return strconv.Atoi(str)
+	return strconv.Atoi(effectiveSettingValue(key, str))
 }
 
 func (s *SettingService) setInt(key string, value int) error {
@@ -498,6 +510,24 @@ func (s *SettingService) GetSecret() ([]byte, error) {
 	return []byte(secret), err
 }
 
+// GetPanelGuid returns this panel's stable self-identifier, persisting a
+// freshly generated UUID on first read. It is the globally stable node
+// identity used to attribute online clients and inbounds to the physical
+// node that hosts them across a chain of nodes (#4983), where per-panel
+// autoincrement node ids are meaningless one hop away.
+func (s *SettingService) GetPanelGuid() (string, error) {
+	guid, err := s.getString("panelGuid")
+	if err != nil {
+		return "", err
+	}
+	if guid == defaultValueMap["panelGuid"] {
+		if saveErr := s.saveSetting("panelGuid", guid); saveErr != nil {
+			logger.Warning("save panelGuid failed:", saveErr)
+		}
+	}
+	return guid, nil
+}
+
 func (s *SettingService) SetBasePath(basePath string) error {
 	if !strings.HasPrefix(basePath, "/") {
 		basePath = "/" + basePath
@@ -649,12 +679,12 @@ func (s *SettingService) GetSubClashURI() (string, error) {
 	return s.getString("subClashURI")
 }
 
-func (s *SettingService) GetSubJsonFragment() (string, error) {
-	return s.getString("subJsonFragment")
+func (s *SettingService) GetSubClashEnableRouting() (bool, error) {
+	return s.getBool("subClashEnableRouting")
 }
 
-func (s *SettingService) GetSubJsonNoises() (string, error) {
-	return s.getString("subJsonNoises")
+func (s *SettingService) GetSubClashRules() (string, error) {
+	return s.getString("subClashRules")
 }
 
 func (s *SettingService) GetSubJsonMux() (string, error) {
@@ -663,6 +693,10 @@ func (s *SettingService) GetSubJsonMux() (string, error) {
 
 func (s *SettingService) GetSubJsonRules() (string, error) {
 	return s.getString("subJsonRules")
+}
+
+func (s *SettingService) GetSubJsonFinalMask() (string, error) {
+	return s.getString("subJsonFinalMask")
 }
 
 func (s *SettingService) GetDatepicker() (string, error) {
@@ -908,6 +942,28 @@ func extractHostname(host string) string {
 	return "[" + h + "]"
 }
 
+// BuildSubURIBase is shared by GetDefaultSettings (the panel's Client
+// Information page) and the subscription page so both render subscription
+// URLs identically.
+func (s *SettingService) BuildSubURIBase(host string) string {
+	subPort, _ := s.GetSubPort()
+	subDomain, _ := s.GetSubDomain()
+	subKeyFile, _ := s.GetSubKeyFile()
+	subCertFile, _ := s.GetSubCertFile()
+	subTLS := subKeyFile != "" && subCertFile != ""
+	if subDomain == "" {
+		subDomain = extractHostname(host)
+	}
+	scheme := "http"
+	if subTLS {
+		scheme = "https"
+	}
+	if (subPort == 443 && subTLS) || (subPort == 80 && !subTLS) {
+		return scheme + "://" + subDomain
+	}
+	return fmt.Sprintf("%s://%s:%d", scheme, subDomain, subPort)
+}
+
 func (s *SettingService) GetDefaultSettings(host string) (any, error) {
 	type settingFunc func() (any, error)
 	settings := map[string]settingFunc{
@@ -927,6 +983,8 @@ func (s *SettingService) GetDefaultSettings(host string) (any, error) {
 		"remarkModel":    func() (any, error) { return s.GetRemarkModel() },
 		"datepicker":     func() (any, error) { return s.GetDatepicker() },
 		"ipLimitEnable":  func() (any, error) { return s.GetIpLimitEnable() },
+		"webDomain":      func() (any, error) { return s.GetWebDomain() },
+		"subDomain":      func() (any, error) { return s.GetSubDomain() },
 	}
 
 	result := make(map[string]any)
@@ -953,32 +1011,11 @@ func (s *SettingService) GetDefaultSettings(host string) (any, error) {
 		}
 	}
 	if (subEnable && result["subURI"].(string) == "") || (subJsonEnable && result["subJsonURI"].(string) == "") || (subClashEnable && result["subClashURI"].(string) == "") {
-		subURI := ""
+		subURI := s.BuildSubURIBase(host)
 		subTitle, _ := s.GetSubTitle()
-		subPort, _ := s.GetSubPort()
 		subPath, _ := s.GetSubPath()
 		subJsonPath, _ := s.GetSubJsonPath()
 		subClashPath, _ := s.GetSubClashPath()
-		subDomain, _ := s.GetSubDomain()
-		subKeyFile, _ := s.GetSubKeyFile()
-		subCertFile, _ := s.GetSubCertFile()
-		subTLS := false
-		if subKeyFile != "" && subCertFile != "" {
-			subTLS = true
-		}
-		if subDomain == "" {
-			subDomain = extractHostname(host)
-		}
-		if subTLS {
-			subURI = "https://"
-		} else {
-			subURI = "http://"
-		}
-		if (subPort == 443 && subTLS) || (subPort == 80 && !subTLS) {
-			subURI += subDomain
-		} else {
-			subURI += fmt.Sprintf("%s:%d", subDomain, subPort)
-		}
 		if subEnable && result["subURI"].(string) == "" {
 			result["subURI"] = subURI + subPath
 		}

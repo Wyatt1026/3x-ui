@@ -247,12 +247,11 @@ func (t *Tgbot) Start(i18nFS embed.FS) error {
 	}
 
 	// Fall back to the panel-wide proxy when no dedicated bot proxy is set.
-	// The bot's fasthttp dialer only supports SOCKS5, so other schemes are ignored.
 	if tgBotProxy == "" {
 		panelProxy, perr := t.settingService.GetPanelProxy()
 		if perr != nil {
 			logger.Warning("Failed to get panel proxy URL:", perr)
-		} else if strings.HasPrefix(panelProxy, "socks5://") {
+		} else if isSupportedBotProxyScheme(panelProxy) {
 			tgBotProxy = panelProxy
 		}
 	}
@@ -304,6 +303,12 @@ func (t *Tgbot) trySetBotCommands(bot *telego.Bot) {
 	}
 }
 
+func isSupportedBotProxyScheme(proxyUrl string) bool {
+	return strings.HasPrefix(proxyUrl, "socks5://") ||
+		strings.HasPrefix(proxyUrl, "http://") ||
+		strings.HasPrefix(proxyUrl, "https://")
+}
+
 // createRobustFastHTTPClient creates a fasthttp.Client with proper connection handling
 func (t *Tgbot) createRobustFastHTTPClient(proxyUrl string) *fasthttp.Client {
 	client := &fasthttp.Client{
@@ -326,9 +331,12 @@ func (t *Tgbot) createRobustFastHTTPClient(proxyUrl string) *fasthttp.Client {
 		},
 	}
 
-	// Set proxy if provided
 	if proxyUrl != "" {
-		client.Dial = fasthttpproxy.FasthttpSocksDialer(proxyUrl)
+		if strings.HasPrefix(proxyUrl, "socks5://") {
+			client.Dial = fasthttpproxy.FasthttpSocksDialer(proxyUrl)
+		} else {
+			client.Dial = fasthttpproxy.FasthttpHTTPDialer(proxyUrl)
+		}
 	}
 
 	return client
@@ -338,15 +346,12 @@ func (t *Tgbot) createRobustFastHTTPClient(proxyUrl string) *fasthttp.Client {
 func (t *Tgbot) NewBot(token string, proxyUrl string, apiServerUrl string) (*telego.Bot, error) {
 	// Validate proxy URL if provided
 	if proxyUrl != "" {
-		if !strings.HasPrefix(proxyUrl, "socks5://") {
-			logger.Warning("Invalid socks5 URL, ignoring proxy")
+		if !isSupportedBotProxyScheme(proxyUrl) {
+			logger.Warning("Unsupported proxy scheme (want socks5:// or http(s)://), ignoring proxy")
 			proxyUrl = "" // Clear invalid proxy
-		} else {
-			_, err := url.Parse(proxyUrl)
-			if err != nil {
-				logger.Warningf("Can't parse proxy URL, ignoring proxy: %v", err)
-				proxyUrl = ""
-			}
+		} else if _, err := url.Parse(proxyUrl); err != nil {
+			logger.Warningf("Can't parse proxy URL, ignoring proxy: %v", err)
+			proxyUrl = ""
 		}
 	}
 
@@ -490,6 +495,10 @@ func (t *Tgbot) OnReceive() {
 		}, th.TextEqual(t.I18nBot("tgbot.buttons.closeKeyboard")))
 
 		h.HandleMessage(func(ctx *th.Context, message telego.Message) error {
+			if !t.isCommandForCurrentBot(&message) {
+				return nil
+			}
+
 			// Use goroutine with worker pool for concurrent command processing
 			go func() {
 				messageWorkerPool <- struct{}{}        // Acquire worker
@@ -677,6 +686,22 @@ func (t *Tgbot) answerCommand(message *telego.Message, chatId int64, isAdmin boo
 	if msg != "" {
 		t.sendResponse(chatId, msg, onlyMessage, isAdmin)
 	}
+}
+
+func (t *Tgbot) isCommandForCurrentBot(message *telego.Message) bool {
+	return isCommandForBot(message.Text, botUsername())
+}
+
+func botUsername() string {
+	if bot == nil {
+		return ""
+	}
+	return bot.Username()
+}
+
+func isCommandForBot(text string, username string) bool {
+	_, commandUsername, _ := tu.ParseCommand(text)
+	return commandUsername == "" || username == "" || strings.EqualFold(commandUsername, username)
 }
 
 // sendResponse sends the response message based on the onlyMessage flag.
@@ -2665,7 +2690,7 @@ func (t *Tgbot) UserLoginNotify(attempt LoginAttempt) {
 	msg += t.I18nBot("tgbot.messages.username", "Username=="+attempt.Username)
 	msg += t.I18nBot("tgbot.messages.ip", "IP=="+attempt.IP)
 	msg += t.I18nBot("tgbot.messages.time", "Time=="+attempt.Time)
-	t.SendMsgToTgbotAdmins(msg)
+	go t.SendMsgToTgbotAdmins(msg)
 }
 
 // getInboundUsages retrieves and formats inbound usage information.
@@ -3533,35 +3558,32 @@ func (t *Tgbot) sendBackup(chatId int64) {
 	output := t.I18nBot("tgbot.messages.backupTime", "Time=="+time.Now().Format("2006-01-02 15:04:05"))
 	t.SendMsgToTgbot(chatId, output)
 
-	// Update by manually trigger a checkpoint operation
-	err := database.Checkpoint()
-	if err != nil {
-		logger.Error("Error in trigger a checkpoint operation: ", err)
-	}
-
-	// Send database backup
-	file, err := os.Open(config.GetDBPath())
+	// Send database backup (SQLite file, or a pg_dump archive on PostgreSQL)
+	dbData, err := t.serverService.GetDb()
 	if err == nil {
-		defer file.Close()
+		dbFilename := "x-ui.db"
+		if database.IsPostgres() {
+			dbFilename = "x-ui.dump"
+		}
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-		defer cancel()
 		document := tu.Document(
 			tu.ID(chatId),
-			tu.File(file),
+			tu.FileFromBytes(dbData, dbFilename),
 		)
 		_, err = bot.SendDocument(ctx, document)
+		cancel()
 		if err != nil {
 			logger.Error("Error in uploading backup: ", err)
 		}
 	} else {
-		logger.Error("Error in opening db file for backup: ", err)
+		logger.Error("Error in getting db backup: ", err)
 	}
 
 	// Small delay between file sends
 	time.Sleep(500 * time.Millisecond)
 
 	// Send config.json backup
-	file, err = os.Open(xray.GetConfigPath())
+	file, err := os.Open(xray.GetConfigPath())
 	if err == nil {
 		defer file.Close()
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)

@@ -24,6 +24,13 @@ export const NodeRecordSchema = z.object({
   lastHeartbeat: z.number().optional(),
   lastError: z.string().optional(),
   allowPrivateAddress: z.boolean().optional(),
+  tlsVerifyMode: z.enum(['verify', 'skip', 'pin']).optional(),
+  pinnedCertSha256: z.string().optional(),
+  // Multi-hop node tree (#4983): a node's stable GUID, its parent's GUID, and
+  // whether it's a read-only transitive sub-node surfaced from a downstream node.
+  guid: z.string().optional(),
+  parentGuid: z.string().optional(),
+  transitive: z.boolean().optional(),
 }).loose();
 
 export const NodeListSchema = z.array(NodeRecordSchema);
@@ -46,6 +53,8 @@ export const NodeFormSchema = z.object({
   apiToken: z.string().trim().min(1, 'pages.nodes.toasts.fillRequired'),
   enable: z.boolean(),
   allowPrivateAddress: z.boolean(),
+  tlsVerifyMode: z.enum(['verify', 'skip', 'pin']),
+  pinnedCertSha256: z.string().optional().default(''),
 });
 
 export type NodeRecord = z.infer<typeof NodeRecordSchema>;

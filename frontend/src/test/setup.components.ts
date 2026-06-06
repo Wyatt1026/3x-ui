@@ -9,9 +9,10 @@ vi.mock('persian-calendar-suite', () => ({
   PersianDateTimePicker: () => null,
 }));
 
-if (typeof globalThis.localStorage === 'undefined') {
+function createMemoryStorage(): Storage {
   const store = new Map<string, string>();
-  const storage = {
+
+  return {
     getItem: (k: string) => (store.has(k) ? store.get(k)! : null),
     setItem: (k: string, v: string) => { store.set(k, String(v)); },
     removeItem: (k: string) => { store.delete(k); },
@@ -19,9 +20,19 @@ if (typeof globalThis.localStorage === 'undefined') {
     key: (i: number) => Array.from(store.keys())[i] ?? null,
     get length() { return store.size; },
   } as Storage;
-  Object.defineProperty(globalThis, 'localStorage', { value: storage, configurable: true });
-  Object.defineProperty(globalThis, 'sessionStorage', { value: storage, configurable: true });
 }
+
+function installStorage(name: 'localStorage' | 'sessionStorage') {
+  const current = (globalThis as unknown as Record<typeof name, Partial<Storage> | undefined>)[name];
+  if (typeof current?.getItem === 'function' && typeof current.setItem === 'function') return;
+
+  const storage = createMemoryStorage();
+  Object.defineProperty(globalThis, name, { value: storage, configurable: true });
+  Object.defineProperty(window, name, { value: storage, configurable: true });
+}
+
+installStorage('localStorage');
+installStorage('sessionStorage');
 
 if (!window.matchMedia) {
   window.matchMedia = ((query: string) => ({
@@ -58,7 +69,19 @@ if (!i18next.isInitialized) {
   });
 }
 
-afterEach(() => {
+afterEach(async () => {
   cleanup();
   document.body.innerHTML = '';
+  /*
+   * React 19 defers passive-effect flushes onto a macrotask (setImmediate),
+   * whose callback reads `window.event`. If one is still queued when vitest
+   * tears down the jsdom environment, it fires after `window` is gone and
+   * throws "window is not defined". Drain a few macrotask ticks here so any
+   * pending callback runs while `window` still exists. Several ticks are used
+   * because a microtask resolving mid-drain (rc-trigger/AntD) can queue a new
+   * one behind the first.
+   */
+  for (let i = 0; i < 3; i += 1) {
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  }
 });

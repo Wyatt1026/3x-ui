@@ -1,38 +1,35 @@
 import { useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Alert, Button, Collapse, Input, Modal, Select, Space, Switch } from 'antd';
-import { CloudOutlined, ApiOutlined } from '@ant-design/icons';
+import { Alert, Button, Input, InputNumber, Modal, Select, Space, Switch, Tabs } from 'antd';
+import {
+  BarChartOutlined,
+  ClockCircleOutlined,
+  FileTextOutlined,
+  ReloadOutlined,
+  SettingOutlined,
+} from '@ant-design/icons';
 
 import { OutboundDomainStrategies } from '@/schemas/primitives';
+import { HappyEyeballsSchema } from '@/schemas/protocols/stream/sockopt';
 import { SettingListItem } from '@/components/ui';
+import { useMediaQuery } from '@/hooks/useMediaQuery';
+import { catTabLabel } from '@/pages/settings/catTabLabel';
 import type { XraySettingsValue, SetTemplate } from '@/hooks/useXraySetting';
 import './BasicsTab.css';
 
 import {
   ACCESS_LOG,
-  BITTORRENT_PROTOCOLS,
-  BLOCK_DOMAINS_OPTIONS,
-  DOMAINS_OPTIONS,
   ERROR_LOG,
-  IPS_OPTIONS,
   LOG_LEVELS,
   MASK_ADDRESS,
   ROUTING_DOMAIN_STRATEGIES,
-  SERVICES_OPTIONS,
-  directSettings,
-  ipv4Settings,
 } from './constants';
-import { ruleGetter, ruleSetter, syncOutbound } from './helpers';
 
 interface BasicsTabProps {
   templateSettings: XraySettingsValue | null;
   setTemplateSettings: SetTemplate;
   outboundTestUrl: string;
   onChangeOutboundTestUrl: (v: string) => void;
-  warpExist: boolean;
-  nordExist: boolean;
-  onShowWarp: () => void;
-  onShowNord: () => void;
   onResetDefault: () => void;
 }
 
@@ -41,13 +38,10 @@ export default function BasicsTab({
   setTemplateSettings,
   outboundTestUrl,
   onChangeOutboundTestUrl,
-  warpExist,
-  nordExist,
-  onShowWarp,
-  onShowNord,
   onResetDefault,
 }: BasicsTabProps) {
   const { t } = useTranslation();
+  const { isMobile } = useMediaQuery();
   const [modal, modalContextHolder] = Modal.useModal();
 
   const mutate = useCallback(
@@ -60,6 +54,20 @@ export default function BasicsTab({
       });
     },
     [setTemplateSettings],
+  );
+
+  const setLevel0 = useCallback(
+    (field: string, value: number | null) => mutate((tt) => {
+      if (!tt.policy) tt.policy = {};
+      if (!tt.policy.levels) tt.policy.levels = {};
+      if (!tt.policy.levels['0']) tt.policy.levels['0'] = {};
+      if (value === null || value === undefined) {
+        delete tt.policy.levels['0'][field];
+      } else {
+        tt.policy.levels['0'][field] = value;
+      }
+    }),
+    [mutate],
   );
 
   function confirmResetDefault() {
@@ -77,27 +85,58 @@ export default function BasicsTab({
       | { domainStrategy?: string }
       | undefined)?.domainStrategy ?? 'AsIs';
 
+  const directFreedomOutbound = templateSettings?.outbounds?.find(
+    (o) => o?.protocol === 'freedom' && o?.tag === 'direct',
+  );
+  const directHappyEyeballs = (() => {
+    const sockopt = (directFreedomOutbound?.streamSettings as { sockopt?: { happyEyeballs?: unknown } } | undefined)
+      ?.sockopt;
+    const raw = sockopt?.happyEyeballs;
+    if (raw == null || typeof raw !== 'object') return null;
+    return HappyEyeballsSchema.parse(raw);
+  })();
+
+  const setDirectHappyEyeballs = useCallback(
+    (next: ReturnType<typeof HappyEyeballsSchema.parse> | null) => {
+      mutate((tt) => {
+        if (!tt.outbounds) tt.outbounds = [];
+        let idx = tt.outbounds.findIndex((o) => o?.protocol === 'freedom' && o?.tag === 'direct');
+        if (idx < 0) {
+          tt.outbounds.push({ protocol: 'freedom', tag: 'direct', settings: {} });
+          idx = tt.outbounds.length - 1;
+        }
+        const ob = tt.outbounds[idx];
+        const stream = (ob.streamSettings ?? {}) as Record<string, unknown>;
+        const sockopt = (stream.sockopt ?? {}) as Record<string, unknown>;
+        if (next == null) {
+          delete sockopt.happyEyeballs;
+        } else {
+          sockopt.happyEyeballs = next;
+        }
+        if (Object.keys(sockopt).length === 0) {
+          delete stream.sockopt;
+        } else {
+          stream.sockopt = sockopt;
+        }
+        if (Object.keys(stream).length === 0) {
+          delete ob.streamSettings;
+        } else {
+          ob.streamSettings = stream;
+        }
+      });
+    },
+    [mutate],
+  );
+
   const routingStrategy = templateSettings?.routing?.domainStrategy ?? 'AsIs';
   const log = (templateSettings?.log || {}) as Record<string, unknown>;
   const policy = (templateSettings?.policy?.system || {}) as Record<string, boolean>;
-
-  const blockedIPs = ruleGetter(templateSettings, 'blocked', 'ip');
-  const blockedDomains = ruleGetter(templateSettings, 'blocked', 'domain');
-  const blockedProtocols = ruleGetter(templateSettings, 'blocked', 'protocol');
-  const directIPs = ruleGetter(templateSettings, 'direct', 'ip');
-  const directDomains = ruleGetter(templateSettings, 'direct', 'domain');
-  const ipv4Domains = ruleGetter(templateSettings, 'IPv4', 'domain');
-  const warpDomains = ruleGetter(templateSettings, 'warp', 'domain');
-  const nordTag =
-    templateSettings?.outbounds?.find((o) => o?.tag?.startsWith?.('nord-'))?.tag || 'nord';
-  const nordDomains = ruleGetter(templateSettings, nordTag, 'domain');
-
-  const torrentActive = BITTORRENT_PROTOCOLS.every((p) => blockedProtocols.includes(p));
+  const level0 = (templateSettings?.policy?.levels?.['0'] || {}) as Record<string, unknown>;
 
   const items = [
     {
       key: '1',
-      label: t('pages.xray.generalConfigs'),
+      label: catTabLabel(<SettingOutlined />, t('pages.xray.generalConfigs'), isMobile),
       children: (
         <>
           <Alert
@@ -130,6 +169,53 @@ export default function BasicsTab({
             }
           />
           <SettingListItem
+            title={t('pages.xray.FreedomHappyEyeballs')}
+            description={t('pages.xray.FreedomHappyEyeballsDesc')}
+            paddings="small"
+            control={
+              <Switch
+                checked={directHappyEyeballs != null}
+                onChange={(checked) => {
+                  setDirectHappyEyeballs(checked ? HappyEyeballsSchema.parse({}) : null);
+                }}
+              />
+            }
+          />
+          {directHappyEyeballs != null && (
+            <>
+              <SettingListItem
+                title={t('pages.inbounds.form.tryDelayMs')}
+                description={t('pages.xray.FreedomHappyEyeballsTryDelayDesc')}
+                paddings="small"
+                control={
+                  <InputNumber
+                    min={0}
+                    style={{ width: '100%' }}
+                    value={directHappyEyeballs.tryDelayMs}
+                    placeholder="150"
+                    onChange={(v) => setDirectHappyEyeballs({
+                      ...directHappyEyeballs,
+                      tryDelayMs: typeof v === 'number' ? v : 0,
+                    })}
+                  />
+                }
+              />
+              <SettingListItem
+                title={t('pages.inbounds.form.prioritizeIPv6')}
+                paddings="small"
+                control={
+                  <Switch
+                    checked={directHappyEyeballs.prioritizeIPv6}
+                    onChange={(checked) => setDirectHappyEyeballs({
+                      ...directHappyEyeballs,
+                      prioritizeIPv6: checked,
+                    })}
+                  />
+                }
+              />
+            </>
+          )}
+          <SettingListItem
             title={t('pages.xray.RoutingStrategy')}
             description={t('pages.xray.RoutingStrategyDesc')}
             paddings="small"
@@ -161,14 +247,14 @@ export default function BasicsTab({
     },
     {
       key: '2',
-      label: t('pages.xray.statistics'),
+      label: catTabLabel(<BarChartOutlined />, t('pages.xray.statistics'), isMobile),
       children: (
         <>
           {[
             ['statsInboundUplink', t('pages.xray.statsInboundUplink')],
             ['statsInboundDownlink', t('pages.xray.statsInboundDownlink')],
             ['statsOutboundUplink', t('pages.xray.statsOutboundUplink')],
-            ['statsOutboundDownlink', 'Outbound downlink stats'],
+            ['statsOutboundDownlink', t('pages.xray.statsOutboundDownlink')],
           ].map(([field, label]) => (
             <SettingListItem
               key={field}
@@ -190,8 +276,52 @@ export default function BasicsTab({
       ),
     },
     {
+      key: 'connection',
+      label: catTabLabel(<ClockCircleOutlined />, t('pages.xray.connectionLimits'), isMobile),
+      children: (
+        <>
+          <Alert
+            type="warning"
+            showIcon
+            className="mb-12 hint-alert"
+            title={t('pages.xray.connectionLimitsDesc')}
+          />
+          <SettingListItem
+            title={t('pages.xray.connIdle')}
+            description={t('pages.xray.connIdleDesc')}
+            paddings="small"
+            control={
+              <InputNumber
+                value={typeof level0.connIdle === 'number' ? level0.connIdle : undefined}
+                min={0}
+                style={{ width: '100%' }}
+                placeholder="300"
+                addonAfter={t('pages.xray.seconds')}
+                onChange={(v) => setLevel0('connIdle', v as number | null)}
+              />
+            }
+          />
+          <SettingListItem
+            title={t('pages.xray.bufferSize')}
+            description={t('pages.xray.bufferSizeDesc')}
+            paddings="small"
+            control={
+              <InputNumber
+                value={typeof level0.bufferSize === 'number' ? level0.bufferSize : undefined}
+                min={0}
+                style={{ width: '100%' }}
+                placeholder={t('pages.xray.bufferSizePlaceholder')}
+                addonAfter="KB"
+                onChange={(v) => setLevel0('bufferSize', v as number | null)}
+              />
+            }
+          />
+        </>
+      ),
+    },
+    {
       key: '3',
-      label: t('pages.xray.logConfigs'),
+      label: catTabLabel(<FileTextOutlined />, t('pages.xray.logConfigs'), isMobile),
       children: (
         <>
           <Alert
@@ -267,170 +397,11 @@ export default function BasicsTab({
       ),
     },
     {
-      key: '4',
-      label: t('pages.xray.basicRouting'),
-      children: (
-        <>
-          <Alert
-            type="warning"
-            showIcon
-            className="mb-12 hint-alert"
-            title={t('pages.xray.blockConnectionsConfigsDesc')}
-          />
-
-          <SettingListItem
-            title={t('pages.xray.Torrent')}
-            paddings="small"
-            control={
-              <Switch
-                checked={torrentActive}
-                onChange={(checked) => mutate((tt) => {
-                  const next = checked
-                    ? [...blockedProtocols, ...BITTORRENT_PROTOCOLS]
-                    : blockedProtocols.filter((d) => !BITTORRENT_PROTOCOLS.includes(d));
-                  ruleSetter(tt, 'blocked', 'protocol', next);
-                })}
-              />
-            }
-          />
-
-          <SettingListItem
-            title={t('pages.xray.blockips')}
-            paddings="small"
-            control={
-              <Select
-                mode="tags"
-                value={blockedIPs}
-                style={{ width: '100%' }}
-                options={IPS_OPTIONS}
-                onChange={(v) => mutate((tt) => ruleSetter(tt, 'blocked', 'ip', v))}
-              />
-            }
-          />
-
-          <SettingListItem
-            title={t('pages.xray.blockdomains')}
-            paddings="small"
-            control={
-              <Select
-                mode="tags"
-                value={blockedDomains}
-                style={{ width: '100%' }}
-                options={BLOCK_DOMAINS_OPTIONS}
-                onChange={(v) => mutate((tt) => ruleSetter(tt, 'blocked', 'domain', v))}
-              />
-            }
-          />
-
-          <Alert
-            type="warning"
-            showIcon
-            className="mb-12 hint-alert"
-            title={t('pages.xray.directConnectionsConfigsDesc')}
-          />
-
-          <SettingListItem
-            title={t('pages.xray.directips')}
-            paddings="small"
-            control={
-              <Select
-                mode="tags"
-                value={directIPs}
-                style={{ width: '100%' }}
-                options={IPS_OPTIONS}
-                onChange={(v) => mutate((tt) => {
-                  ruleSetter(tt, 'direct', 'ip', v);
-                  syncOutbound(tt, 'direct', directSettings);
-                })}
-              />
-            }
-          />
-
-          <SettingListItem
-            title={t('pages.xray.directdomains')}
-            paddings="small"
-            control={
-              <Select
-                mode="tags"
-                value={directDomains}
-                style={{ width: '100%' }}
-                options={DOMAINS_OPTIONS}
-                onChange={(v) => mutate((tt) => {
-                  ruleSetter(tt, 'direct', 'domain', v);
-                  syncOutbound(tt, 'direct', directSettings);
-                })}
-              />
-            }
-          />
-
-          <SettingListItem
-            title={t('pages.xray.ipv4Routing')}
-            description={t('pages.xray.ipv4RoutingDesc')}
-            paddings="small"
-            control={
-              <Select
-                mode="tags"
-                value={ipv4Domains}
-                style={{ width: '100%' }}
-                options={SERVICES_OPTIONS}
-                onChange={(v) => mutate((tt) => {
-                  ruleSetter(tt, 'IPv4', 'domain', v);
-                  syncOutbound(tt, 'IPv4', ipv4Settings);
-                })}
-              />
-            }
-          />
-
-          <SettingListItem
-            title={t('pages.xray.warpRouting')}
-            description={t('pages.xray.warpRoutingDesc')}
-            paddings="small"
-            control={
-              warpExist ? (
-                <Select
-                  mode="tags"
-                  value={warpDomains}
-                  style={{ width: '100%' }}
-                  options={SERVICES_OPTIONS}
-                  onChange={(v) => mutate((tt) => ruleSetter(tt, 'warp', 'domain', v))}
-                />
-              ) : (
-                <Button type="primary" onClick={onShowWarp} icon={<CloudOutlined />}>
-                  WARP
-                </Button>
-              )
-            }
-          />
-
-          <SettingListItem
-            title={t('pages.xray.nordRouting')}
-            description={t('pages.xray.nordRoutingDesc')}
-            paddings="small"
-            control={
-              nordExist ? (
-                <Select
-                  mode="tags"
-                  value={nordDomains}
-                  style={{ width: '100%' }}
-                  options={SERVICES_OPTIONS}
-                  onChange={(v) => mutate((tt) => ruleSetter(tt, nordTag, 'domain', v))}
-                />
-              ) : (
-                <Button type="primary" onClick={onShowNord} icon={<ApiOutlined />}>
-                  NordVPN
-                </Button>
-              )
-            }
-          />
-        </>
-      ),
-    },
-    {
       key: 'reset',
-      label: t('pages.settings.resetDefaultConfig'),
+      label: catTabLabel(<ReloadOutlined />, t('pages.settings.resetDefaultConfig'), isMobile),
       children: (
         <Space style={{ padding: '0 20px' }}>
-          <Button danger onClick={confirmResetDefault}>
+          <Button type="primary" danger icon={<ReloadOutlined />} onClick={confirmResetDefault}>
             {t('pages.settings.resetDefaultConfig')}
           </Button>
         </Space>
@@ -441,7 +412,7 @@ export default function BasicsTab({
   return (
     <>
       {modalContextHolder}
-      <Collapse defaultActiveKey={['1']} items={items} />
+      <Tabs defaultActiveKey="1" items={items} />
     </>
   );
 }

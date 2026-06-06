@@ -1,7 +1,9 @@
 package sub
 
 import (
+	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"fmt"
 	"maps"
 	"net"
@@ -88,6 +90,22 @@ func isLoopbackHost(host string) bool {
 	return ip != nil && ip.IsLoopback()
 }
 
+// listenIsInternalOnly reports whether a bind address is reachable only from
+// the same host — a loopback IP or a unix-domain socket. Such an inbound can't
+// be dialed directly by a remote client, so when it is the child side of a
+// fallback its share link must be projected through the master. A public or
+// wildcard listen (""/0.0.0.0/::) is reachable on its own port and advertises
+// itself.
+func listenIsInternalOnly(listen string) bool {
+	if listen == "" {
+		return false
+	}
+	if listen[0] == '@' || listen[0] == '/' {
+		return true
+	}
+	return isLoopbackHost(listen)
+}
+
 // GetSubs retrieves subscription links for a given subscription ID and host.
 func (s *SubService) GetSubs(subId string, host string) ([]string, []string, int64, xray.ClientTraffic, error) {
 	s.PrepareForRequest(host)
@@ -158,34 +176,61 @@ func (s *SubService) AggregateTrafficByEmails(emails []string) (xray.ClientTraff
 	if len(emails) == 0 {
 		return agg, 0
 	}
+	db := database.GetDB()
 	var rows []xray.ClientTraffic
-	if err := database.GetDB().
+	if err := db.
 		Model(&xray.ClientTraffic{}).
 		Where("email IN ?", emails).
 		Find(&rows).Error; err != nil {
 		logger.Warning("SubService - AggregateTrafficByEmails: load by email:", err)
 		return agg, 0
 	}
+
+	// total/expiry are configured limits owned by the clients table, not the
+	// runtime traffic rows. In a multi-node setup the node snapshot can reset
+	// client_traffics.total/expiry_time to 0, so fall back to the clients
+	// table to keep the Subscription-Userinfo header in sync with the UI (#4645).
+	limits := make(map[string][2]int64, len(emails))
+	var records []model.ClientRecord
+	if err := db.Model(&model.ClientRecord{}).Where("email IN ?", emails).Find(&records).Error; err != nil {
+		logger.Warning("SubService - AggregateTrafficByEmails: load client limits:", err)
+	} else {
+		for _, r := range records {
+			limits[r.Email] = [2]int64{r.TotalGB, r.ExpiryTime}
+		}
+	}
+
 	now := time.Now().UnixMilli()
-	for i, ct := range rows {
+	first := true
+	for _, ct := range rows {
 		if ct.LastOnline > lastOnline {
 			lastOnline = ct.LastOnline
 		}
-		if i == 0 {
+		total, expiry := ct.Total, ct.ExpiryTime
+		if lim, ok := limits[ct.Email]; ok {
+			if total == 0 {
+				total = lim[0]
+			}
+			if expiry == 0 {
+				expiry = lim[1]
+			}
+		}
+		if first {
 			agg.Up = ct.Up
 			agg.Down = ct.Down
-			agg.Total = ct.Total
-			agg.ExpiryTime = subscriptionExpiryFromClient(now, ct.ExpiryTime)
+			agg.Total = total
+			agg.ExpiryTime = subscriptionExpiryFromClient(now, expiry)
+			first = false
 			continue
 		}
 		agg.Up += ct.Up
 		agg.Down += ct.Down
-		if agg.Total == 0 || ct.Total == 0 {
+		if agg.Total == 0 || total == 0 {
 			agg.Total = 0
 		} else {
-			agg.Total += ct.Total
+			agg.Total += total
 		}
-		normalized := subscriptionExpiryFromClient(now, ct.ExpiryTime)
+		normalized := subscriptionExpiryFromClient(now, expiry)
 		if normalized != agg.ExpiryTime {
 			agg.ExpiryTime = 0
 		}
@@ -231,8 +276,18 @@ func (s *SubService) getInboundsBySubId(subId string) ([]*model.Inbound, error) 
 // Returns true when a projection happened; sub services call this before
 // generating links so a child VLESS-WS bound to 127.0.0.1 emits the
 // master's :443 + TLS state instead of its own loopback endpoint.
+//
+// Projection only applies to a child that is not directly reachable on its
+// own listen (loopback or a unix-domain socket). An inbound on a public or
+// wildcard listen is reachable on its own port, so it advertises its own
+// port + security even when a stale fallback rule still names it as a child —
+// otherwise its share link would leak the master's port and Reality/TLS
+// settings (#4987).
 func (s *SubService) projectThroughFallbackMaster(inbound *model.Inbound) bool {
 	if inbound == nil {
+		return false
+	}
+	if !listenIsInternalOnly(inbound.Listen) {
 		return false
 	}
 	db := database.GetDB()
@@ -576,10 +631,16 @@ func (s *SubService) genHysteriaLink(inbound *model.Inbound, email string) strin
 		if fpValue, ok := searchKey(tlsSettings, "fingerprint"); ok {
 			params["fp"], _ = fpValue.(string)
 		}
-		if insecure, ok := searchKey(tlsSettings, "allowInsecure"); ok {
-			if insecure.(bool) {
-				params["insecure"] = "1"
+		if echValue, ok := searchKey(tlsSettings, "echConfigList"); ok {
+			if ech, _ := echValue.(string); ech != "" {
+				params["ech"] = ech
 			}
+		}
+		if pins, ok := pinnedSha256List(tlsSettings); ok {
+			for i, p := range pins {
+				pins[i] = hysteriaPinHex(p)
+			}
+			params["pinSHA256"] = strings.Join(pins, ",")
 		}
 	}
 
@@ -632,16 +693,34 @@ func (s *SubService) genHysteriaLink(inbound *model.Inbound, email string) strin
 			}
 			epRemark, _ := ep["remark"].(string)
 
+			epParams := cloneStringMap(params)
+			applyExternalProxyHysteriaParams(ep, epParams)
+
 			link := fmt.Sprintf("%s://%s@%s:%d", protocol, auth, dest, int(portF))
-			links = append(links, buildLinkWithParams(link, params, s.genRemark(inbound, email, epRemark)))
+			links = append(links, buildLinkWithParams(link, epParams, s.genRemark(inbound, email, epRemark)))
 		}
 		return strings.Join(links, "\n")
 	}
 
 	// No external proxy configured — use the inbound's resolved address so
 	// node-managed inbounds get the node's host instead of the central panel's.
+	if hopPorts := hysteriaHopPorts(stream); hopPorts != "" {
+		params["mport"] = hopPorts
+	}
 	link := fmt.Sprintf("%s://%s@%s:%d", protocol, auth, s.resolveInboundAddress(inbound), inbound.Port)
 	return buildLinkWithParams(link, params, s.genRemark(inbound, email, ""))
+}
+
+// hysteriaHopPorts returns the configured Hysteria2 UDP port-hopping range
+// (finalmask.quicParams.udpHop.ports), or "" when port hopping is off. The
+// range is emitted as the v2rayN-compatible `mport` query param; the URL port
+// field stays numeric so .NET-Uri-based importers (v2rayN) can parse the link.
+func hysteriaHopPorts(stream map[string]any) string {
+	finalmask, _ := stream["finalmask"].(map[string]any)
+	quicParams, _ := finalmask["quicParams"].(map[string]any)
+	udpHop, _ := quicParams["udpHop"].(map[string]any)
+	ports, _ := udpHop["ports"].(string)
+	return strings.TrimSpace(ports)
 }
 
 // loadNodes refreshes nodesByID from the DB. Called once per request so
@@ -663,24 +742,24 @@ func (s *SubService) loadNodes() {
 	s.nodesByID = m
 }
 
-// resolveInboundAddress picks the host an external client should
-// connect to. Order:
-//  1. If the inbound is node-managed and the node has an address, use
-//     the node's address — central panel's hostname doesn't speak xray
-//     for that inbound.
-//  2. If the inbound binds to a non-wildcard listen address, use it.
-//  3. Otherwise fall back to the request's host (whatever the client
-//     subscribed against).
+// resolveInboundAddress picks the host an external client should connect to:
+//   1. node-managed inbound -> the node's address
+//   2. an explicit, client-reachable bind Listen -> that Listen
+//   3. otherwise the subscriber's request host (s.address)
+// A loopback/wildcard bind or a unix-domain-socket listen is a server-side
+// detail and is never advertised; External Proxy remains the way to advertise
+// an arbitrary endpoint. Mirrors the frontend's resolveAddr so the panel QR and
+// the subscription agree.
 func (s *SubService) resolveInboundAddress(inbound *model.Inbound) string {
 	if inbound.NodeID != nil && s.nodesByID != nil {
 		if n, ok := s.nodesByID[*inbound.NodeID]; ok && n.Address != "" {
 			return n.Address
 		}
 	}
-	if inbound.Listen == "" || inbound.Listen == "0.0.0.0" || inbound.Listen == "::" || inbound.Listen == "::0" {
-		return s.address
+	if listen := inbound.Listen; listen != "" && listen[0] != '@' && listen[0] != '/' && isRoutableHost(listen) {
+		return listen
 	}
-	return inbound.Listen
+	return s.address
 }
 
 func findClientIndex(clients []model.Client, email string) int {
@@ -841,6 +920,11 @@ func applyShareTLSParams(stream map[string]any, params map[string]string) {
 		if fpValue, ok := searchKey(tlsSettings, "fingerprint"); ok {
 			params["fp"], _ = fpValue.(string)
 		}
+		if echValue, ok := searchKey(tlsSettings, "echConfigList"); ok {
+			if ech, _ := echValue.(string); ech != "" {
+				params["ech"] = ech
+			}
+		}
 		if pins, ok := pinnedSha256List(tlsSettings); ok {
 			params["pcs"] = strings.Join(pins, ",")
 		}
@@ -865,6 +949,11 @@ func applyVmessTLSParams(stream map[string]any, obj map[string]any) {
 	if tlsSetting != nil {
 		if fpValue, ok := searchKey(tlsSettings, "fingerprint"); ok {
 			obj["fp"], _ = fpValue.(string)
+		}
+		if echValue, ok := searchKey(tlsSettings, "echConfigList"); ok {
+			if ech, _ := echValue.(string); ech != "" {
+				obj["ech"] = ech
+			}
 		}
 		if pins, ok := pinnedSha256List(tlsSettings); ok {
 			obj["pcs"] = strings.Join(pins, ",")
@@ -897,6 +986,36 @@ func pinnedSha256List(tlsClientSettings any) ([]string, bool) {
 		return nil, false
 	}
 	return out, true
+}
+
+// hysteriaPinHex normalises a pinnedPeerCertSha256 entry into the 64-character
+// lowercase hex form that Xray-core's Hysteria2 pinSHA256 parser requires.
+//
+// The panel stores pins in several shapes: base64 (xray-core's native TLS
+// format, used by the generate button and the JSON subscription) and hex —
+// either bare or colon-separated as `openssl x509 -fingerprint -sha256` emits
+// it. Hysteria2 clients hex-decode pinSHA256 and crash on a base64 value, so
+// each entry is coerced to bare hex here. Anything that is neither a 32-byte
+// hex nor a 32-byte base64 SHA-256 is returned unchanged so unexpected data is
+// not silently dropped. Mirrors decodeCertPin in web/service/node.go.
+func hysteriaPinHex(pin string) string {
+	pin = strings.TrimSpace(pin)
+	if h := strings.ReplaceAll(pin, ":", ""); len(h) == hex.EncodedLen(sha256.Size) {
+		if _, err := hex.DecodeString(h); err == nil {
+			return strings.ToLower(h)
+		}
+	}
+	for _, enc := range []*base64.Encoding{
+		base64.StdEncoding,
+		base64.RawStdEncoding,
+		base64.URLEncoding,
+		base64.RawURLEncoding,
+	} {
+		if b, err := enc.DecodeString(pin); err == nil && len(b) == sha256.Size {
+			return hex.EncodeToString(b)
+		}
+	}
+	return pin
 }
 
 func applyShareRealityParams(stream map[string]any, params map[string]string) {
@@ -937,7 +1056,7 @@ func buildVmessLink(obj map[string]any) string {
 func cloneVmessShareObj(baseObj map[string]any, newSecurity string) map[string]any {
 	newObj := map[string]any{}
 	for key, value := range baseObj {
-		if !(newSecurity == "none" && (key == "alpn" || key == "sni" || key == "fp")) {
+		if !(newSecurity == "none" && (key == "alpn" || key == "sni" || key == "fp" || key == "pcs")) {
 			newObj[key] = value
 		}
 	}
@@ -957,6 +1076,12 @@ func applyExternalProxyTLSObj(ep map[string]any, obj map[string]any, security st
 	if alpn, ok := externalProxyALPN(ep["alpn"]); ok {
 		obj["alpn"] = alpn
 	}
+	if pins, ok := externalProxyPins(ep["pinnedPeerCertSha256"]); ok {
+		obj["pcs"] = joinAnyStrings(pins)
+	}
+	if ech, ok := ep["echConfigList"].(string); ok && ech != "" {
+		obj["ech"] = ech
+	}
 }
 
 func applyExternalProxyTLSParams(ep map[string]any, params map[string]string, security string) {
@@ -972,6 +1097,32 @@ func applyExternalProxyTLSParams(ep map[string]any, params map[string]string, se
 	if alpn, ok := externalProxyALPN(ep["alpn"]); ok {
 		params["alpn"] = alpn
 	}
+	if pins, ok := externalProxyPins(ep["pinnedPeerCertSha256"]); ok {
+		params["pcs"] = joinAnyStrings(pins)
+	}
+	if ech, ok := ep["echConfigList"].(string); ok && ech != "" {
+		params["ech"] = ech
+	}
+}
+
+// applyExternalProxyHysteriaParams overrides the cert pin for a single
+// external-proxy entry on a Hysteria link. Hysteria carries the pin as a hex
+// `pinSHA256` (not the `pcs` the URL-param protocols use), so each entry is
+// coerced through hysteriaPinHex like the main pin. sni/fp/alpn are left as
+// the inbound's own — Hysteria external proxies are typically alternate
+// endpoints (port-hop / CDN) fronting the same certificate.
+func applyExternalProxyHysteriaParams(ep map[string]any, params map[string]string) {
+	pins, ok := externalProxyPins(ep["pinnedPeerCertSha256"])
+	if !ok {
+		return
+	}
+	hexPins := make([]string, 0, len(pins))
+	for _, p := range pins {
+		if s, ok := p.(string); ok {
+			hexPins = append(hexPins, hysteriaPinHex(s))
+		}
+	}
+	params["pinSHA256"] = strings.Join(hexPins, ",")
 }
 
 // cloneStreamForExternalProxy returns a shallow clone of stream with
@@ -1015,6 +1166,22 @@ func applyExternalProxyTLSToStream(ep map[string]any, stream map[string]any, sec
 	}
 	if alpn, ok := externalProxyALPNList(ep["alpn"]); ok {
 		tlsSettings["alpn"] = alpn
+	}
+	if pins, ok := externalProxyPins(ep["pinnedPeerCertSha256"]); ok {
+		settings, _ := tlsSettings["settings"].(map[string]any)
+		if settings == nil {
+			settings = map[string]any{}
+			tlsSettings["settings"] = settings
+		}
+		settings["pinnedPeerCertSha256"] = pins
+	}
+	if ech, ok := ep["echConfigList"].(string); ok && ech != "" {
+		settings, _ := tlsSettings["settings"].(map[string]any)
+		if settings == nil {
+			settings = map[string]any{}
+			tlsSettings["settings"] = settings
+		}
+		settings["echConfigList"] = ech
 	}
 }
 
@@ -1085,6 +1252,43 @@ func externalProxyALPNList(value any) ([]any, bool) {
 	}
 }
 
+// externalProxyPins extracts an external-proxy entry's pinnedPeerCertSha256
+// as a []any of non-empty strings. The []any element type matches what the
+// JSON/Clash sub builders expect when reading the value back off the cloned
+// stream's tlsSettings.settings.
+func externalProxyPins(value any) ([]any, bool) {
+	switch v := value.(type) {
+	case []string:
+		out := make([]any, 0, len(v))
+		for _, item := range v {
+			if item != "" {
+				out = append(out, item)
+			}
+		}
+		return out, len(out) > 0
+	case []any:
+		out := make([]any, 0, len(v))
+		for _, item := range v {
+			if s, ok := item.(string); ok && s != "" {
+				out = append(out, s)
+			}
+		}
+		return out, len(out) > 0
+	default:
+		return nil, false
+	}
+}
+
+func joinAnyStrings(items []any) string {
+	parts := make([]string, 0, len(items))
+	for _, item := range items {
+		if s, ok := item.(string); ok {
+			parts = append(parts, s)
+		}
+	}
+	return strings.Join(parts, ",")
+}
+
 func (s *SubService) buildVmessExternalProxyLinks(externalProxies []any, baseObj map[string]any, inbound *model.Inbound, email string) string {
 	var links strings.Builder
 	for index, externalProxy := range externalProxies {
@@ -1124,8 +1328,8 @@ func buildLinkWithParams(link string, params map[string]string, fragment string)
 
 // buildLinkWithParamsAndSecurity is buildLinkWithParams plus an
 // external-proxy override: the `security` key in params is replaced with
-// the supplied value, and TLS hint fields (alpn/sni/fp) are stripped when
-// the override is `none`.
+// the supplied value, and TLS hint fields (alpn/sni/fp/pcs) are stripped
+// when the override is `none`.
 func buildLinkWithParamsAndSecurity(link string, params map[string]string, fragment, security string, omitTLSFields bool) string {
 	return appendQueryAndFragment(link, params, fragment, security, omitTLSFields)
 }
@@ -1140,7 +1344,7 @@ func appendQueryAndFragment(link string, params map[string]string, fragment, sec
 			if securityOverride != "" && k == "security" {
 				v = securityOverride
 			}
-			if omitTLSFields && (k == "alpn" || k == "sni" || k == "fp") {
+			if omitTLSFields && (k == "alpn" || k == "sni" || k == "fp" || k == "pcs") {
 				continue
 			}
 			q.Set(k, v)
@@ -1472,28 +1676,22 @@ func applyXhttpExtraParams(xhttp map[string]any, params map[string]string) {
 }
 
 var kcpMaskToHeaderType = map[string]string{
-	"header-dns":       "dns",
-	"header-dtls":      "dtls",
-	"header-srtp":      "srtp",
-	"header-utp":       "utp",
-	"header-wechat":    "wechat-video",
-	"header-wireguard": "wireguard",
+	"dns":       "dns",
+	"dtls":      "dtls",
+	"srtp":      "srtp",
+	"utp":       "utp",
+	"wechat":    "wechat-video",
+	"wireguard": "wireguard",
 }
 
 var validFinalMaskUDPTypes = map[string]struct{}{
-	"salamander":       {},
-	"mkcp-aes128gcm":   {},
-	"header-dns":       {},
-	"header-dtls":      {},
-	"header-srtp":      {},
-	"header-utp":       {},
-	"header-wechat":    {},
-	"header-wireguard": {},
-	"mkcp-original":    {},
-	"xdns":             {},
-	"xicmp":            {},
-	"noise":            {},
-	"header-custom":    {},
+	"salamander":    {},
+	"mkcp-legacy":   {},
+	"xdns":          {},
+	"xicmp":         {},
+	"noise":         {},
+	"header-custom": {},
+	"realm":         {},
 }
 
 var validFinalMaskTCPTypes = map[string]struct{}{
@@ -1564,21 +1762,19 @@ func extractKcpShareFields(stream map[string]any) kcpShareFields {
 		if mask == nil {
 			continue
 		}
-		maskType, _ := mask["type"].(string)
-		if mapped, ok := kcpMaskToHeaderType[maskType]; ok {
-			fields.headerType = mapped
+		if maskType, _ := mask["type"].(string); maskType != "mkcp-legacy" {
 			continue
 		}
 
-		switch maskType {
-		case "mkcp-original":
-			fields.seed = ""
-		case "mkcp-aes128gcm":
-			fields.seed = ""
-			settings, _ := mask["settings"].(map[string]any)
-			if value, ok := settings["password"].(string); ok && value != "" {
-				fields.seed = value
-			}
+		settings, _ := mask["settings"].(map[string]any)
+		header, _ := settings["header"].(string)
+		value, _ := settings["value"].(string)
+		if header == "" {
+			fields.seed = value
+			continue
+		}
+		if mapped, ok := kcpMaskToHeaderType[header]; ok {
+			fields.headerType = mapped
 		}
 	}
 
@@ -1866,7 +2062,7 @@ func (s *SubService) ResolveRequest(c *gin.Context) (scheme string, host string,
 
 // BuildURLs constructs absolute subscription and JSON subscription URLs for a given subscription ID.
 // It prioritizes configured URIs, then individual settings, and finally falls back to request-derived components.
-func (s *SubService) BuildURLs(scheme, hostWithPort, subPath, subJsonPath, subClashPath, subId string) (subURL, subJsonURL, subClashURL string) {
+func (s *SubService) BuildURLs(subPath, subJsonPath, subClashPath, subId string) (subURL, subJsonURL, subClashURL string) {
 	if subId == "" {
 		return "", "", ""
 	}
@@ -1875,50 +2071,23 @@ func (s *SubService) BuildURLs(scheme, hostWithPort, subPath, subJsonPath, subCl
 	configuredSubJsonURI, _ := s.settingService.GetSubJsonURI()
 	configuredSubClashURI, _ := s.settingService.GetSubClashURI()
 
-	var baseScheme, baseHostWithPort string
-	if configuredSubURI == "" || configuredSubJsonURI == "" || configuredSubClashURI == "" {
-		baseScheme, baseHostWithPort = s.getBaseSchemeAndHost(scheme, hostWithPort)
-	}
+	// Same base as the panel's Client Information page; s.address is the
+	// subscriber's host already normalized away from any loopback/bind IP.
+	base := s.settingService.BuildSubURIBase(s.address)
 
-	subURL = s.buildSingleURL(configuredSubURI, baseScheme, baseHostWithPort, subPath, subId)
-	subJsonURL = s.buildSingleURL(configuredSubJsonURI, baseScheme, baseHostWithPort, subJsonPath, subId)
-	subClashURL = s.buildSingleURL(configuredSubClashURI, baseScheme, baseHostWithPort, subClashPath, subId)
+	subURL = s.buildSingleURL(configuredSubURI, base, subPath, subId)
+	subJsonURL = s.buildSingleURL(configuredSubJsonURI, base, subJsonPath, subId)
+	subClashURL = s.buildSingleURL(configuredSubClashURI, base, subClashPath, subId)
 
 	return subURL, subJsonURL, subClashURL
 }
 
-// getBaseSchemeAndHost determines the base scheme and host from settings or falls back to request values
-func (s *SubService) getBaseSchemeAndHost(requestScheme, requestHostWithPort string) (string, string) {
-	subDomain, err := s.settingService.GetSubDomain()
-	if err != nil || subDomain == "" {
-		return requestScheme, requestHostWithPort
-	}
-
-	// Get port and TLS settings
-	subPort, _ := s.settingService.GetSubPort()
-	subKeyFile, _ := s.settingService.GetSubKeyFile()
-	subCertFile, _ := s.settingService.GetSubCertFile()
-
-	// Determine scheme from TLS configuration
-	scheme := "http"
-	if subKeyFile != "" && subCertFile != "" {
-		scheme = "https"
-	}
-
-	// Build host:port, always include port for clarity
-	hostWithPort := fmt.Sprintf("%s:%d", subDomain, subPort)
-
-	return scheme, hostWithPort
-}
-
 // buildSingleURL constructs a single URL using configured URI or base components
-func (s *SubService) buildSingleURL(configuredURI, baseScheme, baseHostWithPort, basePath, subId string) string {
+func (s *SubService) buildSingleURL(configuredURI, base, basePath, subId string) string {
 	if configuredURI != "" {
 		return s.joinPathWithID(configuredURI, subId)
 	}
-
-	baseURL := fmt.Sprintf("%s://%s", baseScheme, baseHostWithPort)
-	return s.joinPathWithID(baseURL+basePath, subId)
+	return s.joinPathWithID(base+basePath, subId)
 }
 
 // joinPathWithID safely joins a base path with a subscription ID

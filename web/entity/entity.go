@@ -27,12 +27,12 @@ type AllSetting struct {
 	WebCertFile       string `json:"webCertFile" form:"webCertFile"`                                 // Path to SSL certificate file for web server
 	WebKeyFile        string `json:"webKeyFile" form:"webKeyFile"`                                   // Path to SSL private key file for web server
 	WebBasePath       string `json:"webBasePath" form:"webBasePath"`                                 // Base path for web panel URLs
-	SessionMaxAge     int    `json:"sessionMaxAge" form:"sessionMaxAge" validate:"gte=0,lte=525600"` // Session maximum age in minutes (cap at one year)
+	SessionMaxAge     int    `json:"sessionMaxAge" form:"sessionMaxAge" validate:"gte=1,lte=525600"` // Session maximum age in minutes (cap at one year)
 	TrustedProxyCIDRs string `json:"trustedProxyCIDRs" form:"trustedProxyCIDRs"`                     // Trusted reverse proxy IPs/CIDRs for forwarded headers
 	PanelProxy        string `json:"panelProxy" form:"panelProxy"`                                   // Proxy URL for the panel's own outbound requests (GitHub/Telegram)
 
 	// UI settings
-	PageSize    int    `json:"pageSize" form:"pageSize" validate:"gte=1,lte=1000"`      // Number of items per page in lists
+	PageSize    int    `json:"pageSize" form:"pageSize" validate:"gte=0,lte=1000"`      // Number of items per page in lists (0 disables pagination)
 	ExpireDiff  int    `json:"expireDiff" form:"expireDiff" validate:"gte=0"`           // Expiration warning threshold in days
 	TrafficDiff int    `json:"trafficDiff" form:"trafficDiff" validate:"gte=0,lte=100"` // Traffic warning threshold percentage
 	RemarkModel string `json:"remarkModel" form:"remarkModel"`                          // Remark model pattern for inbounds
@@ -83,10 +83,11 @@ type AllSetting struct {
 	SubClashEnable              bool   `json:"subClashEnable" form:"subClashEnable"`                           // Enable Clash/Mihomo subscription endpoint
 	SubClashPath                string `json:"subClashPath" form:"subClashPath"`                               // Path for Clash/Mihomo subscription endpoint
 	SubClashURI                 string `json:"subClashURI" form:"subClashURI"`                                 // Clash/Mihomo subscription server URI
-	SubJsonFragment             string `json:"subJsonFragment" form:"subJsonFragment"`                         // JSON subscription fragment configuration
-	SubJsonNoises               string `json:"subJsonNoises" form:"subJsonNoises"`                             // JSON subscription noise configuration
+	SubClashEnableRouting       bool   `json:"subClashEnableRouting" form:"subClashEnableRouting"`             // Enable global routing rules for Clash/Mihomo
+	SubClashRules               string `json:"subClashRules" form:"subClashRules"`                             // Clash/Mihomo global routing rules
 	SubJsonMux                  string `json:"subJsonMux" form:"subJsonMux"`                                   // JSON subscription mux configuration
 	SubJsonRules                string `json:"subJsonRules" form:"subJsonRules"`
+	SubJsonFinalMask            string `json:"subJsonFinalMask" form:"subJsonFinalMask"` // JSON subscription global finalmask (tcp/udp masks + quicParams)
 
 	// LDAP settings
 	LdapEnable     bool   `json:"ldapEnable" form:"ldapEnable"`

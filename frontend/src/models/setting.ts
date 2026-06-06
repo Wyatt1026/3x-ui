@@ -34,7 +34,7 @@ export class AllSetting {
   subSupportUrl = '';
   subProfileUrl = '';
   subAnnounce = '';
-  subEnableRouting = true;
+  subEnableRouting = false;
   subRoutingRules = '';
   subListen = '';
   subPort = 2096;
@@ -55,10 +55,11 @@ export class AllSetting {
   subURI = '';
   subJsonURI = '';
   subClashURI = '';
-  subJsonFragment = '';
-  subJsonNoises = '';
+  subClashEnableRouting = false;
+  subClashRules = '';
   subJsonMux = '';
   subJsonRules = '';
+  subJsonFinalMask = '';
 
   timeLocation = 'Local';
 

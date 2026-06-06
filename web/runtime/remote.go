@@ -146,16 +146,30 @@ func (r *Remote) do(ctx context.Context, method, path string, body any) (*envelo
 }
 
 func (r *Remote) resolveRemoteID(ctx context.Context, tag string) (int, error) {
-	if id, ok := r.cacheGet(tag); ok {
+	if id, ok := r.cacheGetTag(tag); ok {
 		return id, nil
 	}
 	if err := r.refreshRemoteIDs(ctx); err != nil {
 		return 0, err
 	}
-	if id, ok := r.cacheGet(tag); ok {
+	if id, ok := r.cacheGetTag(tag); ok {
 		return id, nil
 	}
 	return 0, fmt.Errorf("remote inbound with tag %q not found on node %s", tag, r.node.Name)
+}
+
+// cacheGetTag looks up a remote inbound id by tag, tolerating an n<id>- prefix
+// that lives on only one of the two panels: the node may carry the bare tag
+// while the central panel stores the prefixed form, or vice versa.
+func (r *Remote) cacheGetTag(tag string) (int, bool) {
+	if id, ok := r.cacheGet(tag); ok {
+		return id, true
+	}
+	prefix := fmt.Sprintf("n%d-", r.node.Id)
+	if stripped, found := strings.CutPrefix(tag, prefix); found {
+		return r.cacheGet(stripped)
+	}
+	return r.cacheGet(prefix + tag)
 }
 
 func (r *Remote) cacheGet(tag string) (int, bool) {
@@ -175,6 +189,19 @@ func (r *Remote) cacheDel(tag string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	delete(r.remoteIDByTag, tag)
+}
+
+func (r *Remote) ListRemoteTags(ctx context.Context) ([]string, error) {
+	if err := r.refreshRemoteIDs(ctx); err != nil {
+		return nil, err
+	}
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	tags := make([]string, 0, len(r.remoteIDByTag))
+	for tag := range r.remoteIDByTag {
+		tags = append(tags, tag)
+	}
+	return tags, nil
 }
 
 func (r *Remote) refreshRemoteIDs(ctx context.Context) error {
@@ -272,15 +299,17 @@ func (r *Remote) AddClient(ctx context.Context, ib *model.Inbound, client model.
 	return nil
 }
 
-// DeleteUser is idempotent: master's per-inbound Delete loop may call it
-// multiple times for the same node, and "not found" on the follow-ups is
-// the expected success path.
-func (r *Remote) DeleteUser(ctx context.Context, _ *model.Inbound, email string) error {
+func (r *Remote) DeleteUser(ctx context.Context, ib *model.Inbound, email string) error {
 	if email == "" {
 		return nil
 	}
-	_, err := r.do(ctx, http.MethodPost,
-		"panel/api/clients/del/"+url.PathEscape(email), nil)
+	id, err := r.resolveRemoteID(ctx, ib.Tag)
+	if err != nil {
+		return nil
+	}
+	body := map[string]any{"inboundIds": []int{id}}
+	_, err = r.do(ctx, http.MethodPost,
+		"panel/api/clients/"+url.PathEscape(email)+"/detach", body)
 	if err == nil {
 		return nil
 	}
@@ -290,12 +319,17 @@ func (r *Remote) DeleteUser(ctx context.Context, _ *model.Inbound, email string)
 	return err
 }
 
-func (r *Remote) UpdateUser(ctx context.Context, _ *model.Inbound, oldEmail string, payload model.Client) error {
+func (r *Remote) UpdateUser(ctx context.Context, ib *model.Inbound, oldEmail string, payload model.Client) error {
 	if oldEmail == "" {
 		oldEmail = payload.Email
 	}
-	if _, err := r.do(ctx, http.MethodPost,
-		"panel/api/clients/update/"+url.PathEscape(oldEmail), payload); err != nil {
+	id, err := r.resolveRemoteID(ctx, ib.Tag)
+	if err != nil {
+		return err
+	}
+	path := "panel/api/clients/update/" + url.PathEscape(oldEmail) +
+		"?inboundIds=" + strconv.Itoa(id)
+	if _, err := r.do(ctx, http.MethodPost, path, payload); err != nil {
 		return err
 	}
 	return nil
@@ -304,6 +338,54 @@ func (r *Remote) UpdateUser(ctx context.Context, _ *model.Inbound, oldEmail stri
 func (r *Remote) RestartXray(ctx context.Context) error {
 	_, err := r.do(ctx, http.MethodPost, "panel/api/server/restartXrayService", nil)
 	return err
+}
+
+// UpdatePanel asks the node to run its own official self-updater (update.sh)
+// and restart onto the latest release. The node returns as soon as the job is
+// launched; the new version surfaces on the next heartbeat.
+func (r *Remote) UpdatePanel(ctx context.Context) error {
+	_, err := r.do(ctx, http.MethodPost, "panel/api/server/updatePanel", nil)
+	return err
+}
+
+// WebCertFiles holds a node's own web TLS certificate and key file paths.
+type WebCertFiles struct {
+	WebCertFile string `json:"webCertFile"`
+	WebKeyFile  string `json:"webKeyFile"`
+}
+
+// GetWebCertFiles fetches the node's own web TLS certificate/key file paths so
+// the central panel can offer them as the "Set Cert from Panel" default for a
+// node-assigned inbound — those paths exist on the node, the central panel's
+// don't. See issue #4854.
+func (r *Remote) GetWebCertFiles(ctx context.Context) (*WebCertFiles, error) {
+	env, err := r.do(ctx, http.MethodGet, "panel/api/server/getWebCertFiles", nil)
+	if err != nil {
+		return nil, err
+	}
+	var files WebCertFiles
+	if err := json.Unmarshal(env.Obj, &files); err != nil {
+		return nil, fmt.Errorf("decode web cert files: %w", err)
+	}
+	return &files, nil
+}
+
+// GetDescendants fetches the node's read-only summaries of the nodes IT
+// manages, so this panel can surface them as transitive sub-nodes in a chained
+// topology (#4983). Best-effort: an old-build node without the endpoint returns
+// an error the caller ignores.
+func (r *Remote) GetDescendants(ctx context.Context) ([]model.NodeSummary, error) {
+	env, err := r.do(ctx, http.MethodGet, "panel/api/server/descendants", nil)
+	if err != nil {
+		return nil, err
+	}
+	var out []model.NodeSummary
+	if len(env.Obj) > 0 {
+		if err := json.Unmarshal(env.Obj, &out); err != nil {
+			return nil, fmt.Errorf("decode descendants: %w", err)
+		}
+	}
+	return out, nil
 }
 
 func (r *Remote) ResetClientTraffic(ctx context.Context, _ *model.Inbound, email string) error {
@@ -318,8 +400,14 @@ func (r *Remote) ResetAllTraffics(ctx context.Context) error {
 }
 
 type TrafficSnapshot struct {
-	Inbounds      []*model.Inbound
-	OnlineEmails  []string
+	Inbounds     []*model.Inbound
+	OnlineEmails []string
+	// OnlineTree is the node's GUID-keyed online subtree (its own clients under
+	// its panelGuid plus every descendant under theirs). Preferred over the flat
+	// OnlineEmails so the master can attribute deeply nested clients to the real
+	// node across a chain (#4983). Empty when the node is an old build without
+	// the per-GUID endpoint — OnlineEmails is the fallback then.
+	OnlineTree    map[string][]string
 	LastOnlineMap map[string]int64
 }
 
@@ -334,11 +422,19 @@ func (r *Remote) FetchTrafficSnapshot(ctx context.Context) (*TrafficSnapshot, er
 		return nil, fmt.Errorf("decode inbound list: %w", err)
 	}
 
-	envOnlines, err := r.do(ctx, http.MethodPost, "panel/api/clients/onlines", nil)
-	if err != nil {
-		logger.Warning("remote", r.node.Name, "onlines fetch failed:", err)
-	} else if len(envOnlines.Obj) > 0 {
-		_ = json.Unmarshal(envOnlines.Obj, &snap.OnlineEmails)
+	// Prefer the GUID-keyed subtree; fall back to the flat list only when the
+	// node is an old build without the per-GUID endpoint (#4983).
+	envTree, err := r.do(ctx, http.MethodPost, "panel/api/clients/onlinesByGuid", nil)
+	if err == nil && len(envTree.Obj) > 0 {
+		_ = json.Unmarshal(envTree.Obj, &snap.OnlineTree)
+	}
+	if len(snap.OnlineTree) == 0 {
+		envOnlines, err := r.do(ctx, http.MethodPost, "panel/api/clients/onlines", nil)
+		if err != nil {
+			logger.Warning("remote", r.node.Name, "onlines fetch failed:", err)
+		} else if len(envOnlines.Obj) > 0 {
+			_ = json.Unmarshal(envOnlines.Obj, &snap.OnlineEmails)
+		}
 	}
 
 	envLastOnline, err := r.do(ctx, http.MethodPost, "panel/api/clients/lastOnline", nil)

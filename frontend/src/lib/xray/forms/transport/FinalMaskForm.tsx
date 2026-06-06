@@ -6,21 +6,15 @@ import type { NamePath } from 'antd/es/form/interface';
 import { RandomUtil } from '@/utils';
 import { OutboundProtocols } from '@/schemas/primitives';
 
-// Pattern A FinalMaskForm. Renders a Fragment of Form.Items at absolute
-// paths under `name`; the parent modal owns the Form instance.
-//
-// Naming convention inside Form.List: AntD prefixes Form.Item `name`
-// with the Form.List's own `name`. So Form.Items inside the render
-// prop use RELATIVE paths (e.g. `[field.name, 'type']`). Nested
-// Form.Lists also use relative names. Using absolute paths here would
-// double up the prefix and silently route reads/writes to the wrong
-// storage path.
-
 export interface FinalMaskFormProps {
   name: NamePath;
   network: string;
   protocol: string;
   form: FormInstance;
+  // When true, all sections (TCP / UDP / QUIC) are shown regardless of
+  // network/protocol. Used by the global sub-JSON finalmask editor where
+  // the masks apply to every stream rather than one specific transport.
+  showAll?: boolean;
 }
 
 const TCP_NETWORKS = ['raw', 'tcp', 'httpupgrade', 'ws', 'grpc', 'xhttp'];
@@ -32,10 +26,10 @@ function asPath(name: NamePath): (string | number)[] {
 function defaultTcpMaskSettings(type: string): Record<string, unknown> {
   switch (type) {
     case 'fragment':
-      return { packets: '1-3', length: '', delay: '', maxSplit: '' };
+      return { packets: '1-3', length: '100-200', delay: '', maxSplit: '' };
     case 'sudoku':
       return {
-        password: '', ascii: '', customTable: '', customTables: '',
+        password: '', ascii: '', customTable: '', customTables: [''],
         paddingMin: 0, paddingMax: 0,
       };
     case 'header-custom':
@@ -48,14 +42,15 @@ function defaultTcpMaskSettings(type: string): Record<string, unknown> {
 function defaultUdpMaskSettings(type: string): Record<string, unknown> {
   switch (type) {
     case 'salamander':
-    case 'mkcp-aes128gcm':
       return { password: '' };
-    case 'header-dns':
-      return { domain: '' };
+    case 'mkcp-legacy':
+      return { header: '', value: '' };
     case 'xdns':
       return { domains: [] };
     case 'xicmp':
-      return { ip: '0.0.0.0', id: 0 };
+      return { dgram: false, ips: [] };
+    case 'realm':
+      return { url: '', stunServers: [] };
     case 'header-custom':
       return { client: [], server: [] };
     case 'noise':
@@ -98,12 +93,12 @@ function defaultUdpHop(): Record<string, unknown> {
   return { ports: '20000-50000', interval: '5-10' };
 }
 
-export default function FinalMaskForm({ name, network, protocol, form }: FinalMaskFormProps) {
+export default function FinalMaskForm({ name, network, protocol, form, showAll = false }: FinalMaskFormProps) {
   const base = asPath(name);
   const isHysteria = protocol === OutboundProtocols.Hysteria || protocol === 'hysteria';
-  const showTcp = TCP_NETWORKS.includes(network);
-  const showUdp = isHysteria || network === 'kcp';
-  const showQuic = isHysteria || network === 'xhttp';
+  const showTcp = showAll || TCP_NETWORKS.includes(network);
+  const showUdp = showAll || isHysteria || network === 'kcp';
+  const showQuic = showAll || isHysteria || network === 'xhttp';
   const quicParams = Form.useWatch([...base, 'quicParams'], { form, preserve: true });
   const hasQuicParams = quicParams != null;
 
@@ -215,8 +210,12 @@ function TcpMaskItem({
                     ]}
                   />
                 </Form.Item>
-                <Form.Item label="Length" name={[fieldName, 'settings', 'length']}>
-                  <Input />
+                <Form.Item
+                  label="Length"
+                  name={[fieldName, 'settings', 'length']}
+                  rules={[{ validator: validateFragmentLength }]}
+                >
+                  <Input placeholder="e.g. 100-200" />
                 </Form.Item>
                 <Form.Item label="Delay" name={[fieldName, 'settings', 'delay']}>
                   <Input />
@@ -233,7 +232,9 @@ function TcpMaskItem({
                 <Form.Item label="Password" name={[fieldName, 'settings', 'password']}><Input /></Form.Item>
                 <Form.Item label="ASCII" name={[fieldName, 'settings', 'ascii']}><Input /></Form.Item>
                 <Form.Item label="Custom Table" name={[fieldName, 'settings', 'customTable']}><Input /></Form.Item>
-                <Form.Item label="Custom Tables" name={[fieldName, 'settings', 'customTables']}><Input /></Form.Item>
+                <Form.Item label="Custom Tables" name={[fieldName, 'settings', 'customTables']}>
+                  <Select mode="tags" style={{ width: '100%' }} tokenSeparators={[',']} />
+                </Form.Item>
                 <Form.Item label="Padding Min" name={[fieldName, 'settings', 'paddingMin']}>
                   <InputNumber min={0} />
                 </Form.Item>
@@ -262,6 +263,18 @@ function TcpMaskItem({
 // Walks a deep object path safely. Used inside shouldUpdate which gets
 // the whole form values blob; we need to compare a deep field across
 // prev/curr without crashing on missing intermediates.
+function validateFragmentLength(_rule: unknown, value: unknown): Promise<void> {
+  const str = typeof value === 'string' ? value.trim() : String(value ?? '').trim();
+  if (str.length === 0) {
+    return Promise.reject(new Error('Length is required — xray rejects a fragment mask whose LengthMin is 0'));
+  }
+  const min = Number(str.split('-')[0]);
+  if (!Number.isFinite(min) || min <= 0) {
+    return Promise.reject(new Error('Length minimum must be greater than 0 (e.g. 100-200)'));
+  }
+  return Promise.resolve();
+}
+
 function getDeep(obj: unknown, path: (string | number)[]): unknown {
   let cur: unknown = obj;
   for (const key of path) {
@@ -344,7 +357,7 @@ function UdpMasksList({
               size="small"
               icon={<PlusOutlined />}
               onClick={() => {
-                const def = isHysteria ? 'salamander' : 'mkcp-aes128gcm';
+                const def = isHysteria ? 'salamander' : 'mkcp-legacy';
                 add({ type: def, settings: defaultUdpMaskSettings(def) });
               }}
             />
@@ -391,19 +404,13 @@ function UdpMaskItem({
   const options = isHysteria
     ? [{ value: 'salamander', label: 'Salamander (Hysteria2)' }]
     : [
-        { value: 'mkcp-aes128gcm', label: 'mKCP AES-128-GCM' },
-        { value: 'header-dns', label: 'Header DNS' },
-        { value: 'header-dtls', label: 'Header DTLS 1.2' },
-        { value: 'header-srtp', label: 'Header SRTP' },
-        { value: 'header-utp', label: 'Header uTP' },
-        { value: 'header-wechat', label: 'Header WeChat Video' },
-        { value: 'header-wireguard', label: 'Header WireGuard' },
-        { value: 'mkcp-original', label: 'mKCP Original' },
-        { value: 'xdns', label: 'xDNS' },
-        { value: 'xicmp', label: 'xICMP' },
-        { value: 'header-custom', label: 'Header Custom' },
-        { value: 'noise', label: 'Noise' },
-      ];
+      { value: 'mkcp-legacy', label: 'mKCP Legacy' },
+      { value: 'xdns', label: 'xDNS' },
+      { value: 'xicmp', label: 'xICMP' },
+      { value: 'realm', label: 'Realm' },
+      { value: 'header-custom', label: 'Header Custom' },
+      { value: 'noise', label: 'Noise' },
+    ];
 
   return (
     <div>
@@ -422,7 +429,7 @@ function UdpMaskItem({
       >
         {({ getFieldValue }) => {
           const type = getFieldValue([...absolutePath, 'type']) as string | undefined;
-          if (type === 'mkcp-aes128gcm' || type === 'salamander') {
+          if (type === 'salamander') {
             return (
               <Form.Item label="Password">
                 <Space.Compact block>
@@ -440,11 +447,26 @@ function UdpMaskItem({
               </Form.Item>
             );
           }
-          if (type === 'header-dns') {
+          if (type === 'mkcp-legacy') {
             return (
-              <Form.Item label="Domain" name={[fieldName, 'settings', 'domain']}>
-                <Input placeholder="e.g., www.example.com" />
-              </Form.Item>
+              <>
+                <Form.Item label="Header" name={[fieldName, 'settings', 'header']}>
+                  <Select
+                    options={[
+                      { value: '', label: 'Original / AES-128-GCM' },
+                      { value: 'dns', label: 'DNS' },
+                      { value: 'dtls', label: 'DTLS 1.2' },
+                      { value: 'srtp', label: 'SRTP' },
+                      { value: 'utp', label: 'uTP' },
+                      { value: 'wechat', label: 'WeChat Video' },
+                      { value: 'wireguard', label: 'WireGuard' },
+                    ]}
+                  />
+                </Form.Item>
+                <Form.Item label="Value" name={[fieldName, 'settings', 'value']}>
+                  <Input placeholder="password (AES-128-GCM) or domain (DNS header)" />
+                </Form.Item>
+              </>
             );
           }
           if (type === 'xdns') {
@@ -457,11 +479,23 @@ function UdpMaskItem({
           if (type === 'xicmp') {
             return (
               <>
-                <Form.Item label="IP" name={[fieldName, 'settings', 'ip']}>
-                  <Input placeholder="0.0.0.0" />
+                <Form.Item label="Dgram" name={[fieldName, 'settings', 'dgram']} valuePropName="checked">
+                  <Switch />
                 </Form.Item>
-                <Form.Item label="ID" name={[fieldName, 'settings', 'id']}>
-                  <InputNumber min={0} />
+                <Form.Item label="IPs" name={[fieldName, 'settings', 'ips']}>
+                  <Select mode="tags" style={{ width: '100%' }} tokenSeparators={[',']} />
+                </Form.Item>
+              </>
+            );
+          }
+          if (type === 'realm') {
+            return (
+              <>
+                <Form.Item label="URL" name={[fieldName, 'settings', 'url']}>
+                  <Input placeholder="realm://token@host:port/id" />
+                </Form.Item>
+                <Form.Item label="STUN Servers" name={[fieldName, 'settings', 'stunServers']}>
+                  <Select mode="tags" style={{ width: '100%' }} tokenSeparators={[',']} placeholder="host:port" />
                 </Form.Item>
               </>
             );

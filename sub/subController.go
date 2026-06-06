@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/url"
 	"os"
 	"strconv"
 	"strings"
@@ -61,10 +62,11 @@ func NewSUBController(
 	showInfo bool,
 	rModel string,
 	update string,
-	jsonFragment string,
-	jsonNoise string,
 	jsonMux string,
 	jsonRules string,
+	jsonFinalMask string,
+	clashEnableRouting bool,
+	clashRules string,
 	subTitle string,
 	subSupportUrl string,
 	subProfileUrl string,
@@ -89,8 +91,8 @@ func NewSUBController(
 		updateInterval:   update,
 
 		subService:      sub,
-		subJsonService:  NewSubJsonService(jsonFragment, jsonNoise, jsonMux, jsonRules, sub),
-		subClashService: NewSubClashService(sub),
+		subJsonService:  NewSubJsonService(jsonMux, jsonRules, jsonFinalMask, sub),
+		subClashService: NewSubClashService(clashEnableRouting, clashRules, sub),
 	}
 	a.initRouter(g)
 	return a
@@ -130,7 +132,7 @@ func (a *SUBController) subs(c *gin.Context) {
 		// If the request expects HTML (e.g., browser) or explicitly asked (?html=1 or ?view=html), render the info page here
 		accept := c.GetHeader("Accept")
 		if strings.Contains(strings.ToLower(accept), "text/html") || c.Query("html") == "1" || strings.EqualFold(c.Query("view"), "html") {
-			subURL, subJsonURL, subClashURL := a.subService.BuildURLs(scheme, hostWithPort, a.subPath, a.subJsonPath, a.subClashPath, subId)
+			subURL, subJsonURL, subClashURL := a.subService.BuildURLs(a.subPath, a.subJsonPath, a.subClashPath, subId)
 			if !a.jsonEnabled {
 				subJsonURL = ""
 			}
@@ -277,6 +279,10 @@ func (a *SUBController) subClashs(c *gin.Context) {
 			profileUrl = fmt.Sprintf("%s://%s%s", scheme, hostWithPort, c.Request.RequestURI)
 		}
 		a.ApplyCommonHeaders(c, header, a.updateInterval, a.subTitle, a.subSupportUrl, profileUrl, a.subAnnounce, a.subEnableRouting, a.subRoutingRules)
+		if a.subTitle != "" {
+			// Clash clients commonly use Content-Disposition to choose the imported profile name.
+			c.Writer.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename*=UTF-8''%s`, url.PathEscape(a.subTitle)))
+		}
 		c.Data(200, "application/yaml; charset=utf-8", []byte(clashSub))
 	}
 }

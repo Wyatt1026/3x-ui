@@ -309,9 +309,26 @@ export const sections: readonly Section[] = [
       },
       {
         method: 'GET',
+        path: '/panel/api/server/getMigration',
+        summary: 'Stream a cross-engine migration file as an attachment: a .dump (SQL text) on SQLite, or a .db SQLite database built from the live data on PostgreSQL.',
+      },
+      {
+        method: 'GET',
         path: '/panel/api/server/getNewUUID',
         summary: 'Generate a fresh UUID v4. Convenience helper for client IDs.',
         response: '{\n  "success": true,\n  "obj": "550e8400-e29b-41d4-a716-446655440000"\n}',
+      },
+      {
+        method: 'GET',
+        path: '/panel/api/server/getWebCertFiles',
+        summary: 'Return this panel\'s own web TLS certificate and key file paths. The central panel calls it on a node (via the node API token) so "Set Cert from Panel" fills a node-assigned inbound with paths that exist on the node.',
+        response: '{\n  "success": true,\n  "obj": {\n    "webCertFile": "/root/cert/example.com/fullchain.pem",\n    "webKeyFile": "/root/cert/example.com/privkey.pem"\n  }\n}',
+      },
+      {
+        method: 'GET',
+        path: '/panel/api/server/descendants',
+        summary: 'Read-only summaries (guid, parentGuid, name, address, status, versions) of the nodes this panel manages. A parent panel calls it on a node (via the node API token) to surface transitive sub-nodes in a chained topology. Counts are computed by the parent, not returned here.',
+        response: '{\n  "success": true,\n  "obj": [\n    {\n      "guid": "c3d4-...",\n      "parentGuid": "a1b2-...",\n      "name": "Node3",\n      "address": "10.0.0.3",\n      "status": "online"\n    }\n  ]\n}',
       },
       {
         method: 'GET',
@@ -666,8 +683,20 @@ export const sections: readonly Section[] = [
       {
         method: 'POST',
         path: '/panel/api/clients/onlines',
-        summary: 'List the emails of currently connected clients (last seen within the heartbeat window).',
+        summary: 'List the emails of currently connected clients (last seen within the heartbeat window), deduped across every node.',
         response: '{\n  "success": true,\n  "obj": ["user1", "user2"]\n}',
+      },
+      {
+        method: 'POST',
+        path: '/panel/api/clients/onlinesByGuid',
+        summary: 'Online client emails grouped by the panelGuid of the node that physically hosts each client. The local panel uses its own GUID; each node (at any depth in a chain) uses its GUID. Lets the inbounds page attribute online status to the real node instead of the intermediate one it syncs through.',
+        response: '{\n  "success": true,\n  "obj": {\n    "a1b2-...": ["user1"],\n    "c3d4-...": ["user1", "user2"]\n  }\n}',
+      },
+      {
+        method: 'POST',
+        path: '/panel/api/clients/activeInbounds',
+        summary: 'Inbound tags that carried traffic within the heartbeat window, grouped by the hosting node\'s panelGuid. Pairs with onlinesByGuid so the inbounds page only marks a multi-inbound client online on the inbounds it actually used. Nodes that do not report per-inbound activity are absent.',
+        response: '{\n  "success": true,\n  "obj": {\n    "a1b2-...": ["inbound-443", "inbound-8443"]\n  }\n}',
       },
       {
         method: 'POST',
@@ -730,6 +759,15 @@ export const sections: readonly Section[] = [
         ],
       },
       {
+        method: 'GET',
+        path: '/panel/api/nodes/webCert/:id',
+        summary: 'Fetch a node\'s own web TLS certificate/key file paths (proxied to the node). Used by the inbound form\'s "Set Cert from Panel" so a node-assigned inbound gets paths that exist on the node, not the central panel.',
+        params: [
+          { name: 'id', in: 'path', type: 'number', desc: 'Node ID.' },
+        ],
+        response: '{\n  "success": true,\n  "obj": {\n    "webCertFile": "/root/cert/example.com/fullchain.pem",\n    "webKeyFile": "/root/cert/example.com/privkey.pem"\n  }\n}',
+      },
+      {
         method: 'POST',
         path: '/panel/api/nodes/add',
         summary: 'Register a new remote node. Provide its URL, apiToken, and optional remark / allowPrivateAddress flag.',
@@ -771,11 +809,25 @@ export const sections: readonly Section[] = [
       },
       {
         method: 'POST',
+        path: '/panel/api/nodes/certFingerprint',
+        summary: "Connect to the node over HTTPS without verifying its certificate and return the leaf certificate's SHA-256 (base64). Used by the Add/Edit Node dialog to fetch and pin a self-signed certificate. Uses the same body as /test.",
+        body: '{\n  "scheme": "https",\n  "address": "node1.example.com",\n  "port": 2053,\n  "basePath": "/"\n}',
+        response: '{\n  "success": true,\n  "obj": "k3b1...base64-sha256...="\n}',
+      },
+      {
+        method: 'POST',
         path: '/panel/api/nodes/probe/:id',
         summary: 'Probe an existing node, updating its cached health state.',
         params: [
           { name: 'id', in: 'path', type: 'number', desc: 'Node ID.' },
         ],
+      },
+      {
+        method: 'POST',
+        path: '/panel/api/nodes/updatePanel',
+        summary: 'Trigger the official panel self-updater on each given node (downloads the latest release and restarts). Only enabled, online nodes are updated; offline/disabled ones are reported as skipped. Returns a per-node result list.',
+        body: '{\n  "ids": [1, 2, 3]\n}',
+        response: '{\n  "success": true,\n  "obj": [\n    { "id": 1, "name": "de-1", "ok": true },\n    { "id": 2, "name": "fr-1", "ok": false, "error": "node is offline" }\n  ]\n}',
       },
       {
         method: 'GET',
@@ -910,18 +962,18 @@ export const sections: readonly Section[] = [
     id: 'api-tokens',
     title: 'API Tokens',
     description:
-      'Manage Bearer tokens used for programmatic auth (bots, central panels acting on this node, CI). Each token has a unique name and an enabled flag — disable to revoke without deleting, delete to revoke permanently. Tokens are stored plaintext so the SPA can show them on demand. Send one as <code>Authorization: Bearer &lt;token&gt;</code> on any /panel/api/* request.',
+      'Manage Bearer tokens used for programmatic auth (bots, central panels acting on this node, CI). Each token has a unique name and an enabled flag — disable to revoke without deleting, delete to revoke permanently. Tokens are stored as SHA-256 hashes and the plaintext is returned only once, in the create response — it cannot be retrieved afterwards, so copy it then. Send one as <code>Authorization: Bearer &lt;token&gt;</code> on any /panel/api/* request.',
     endpoints: [
       {
         method: 'GET',
         path: '/panel/setting/apiTokens',
-        summary: 'List every API token, enabled or not.',
-        response: '{\n  "success": true,\n  "obj": [\n    {\n      "id": 1,\n      "name": "default",\n      "token": "abcdef-12345-...",\n      "enabled": true,\n      "createdAt": 1736000000\n    }\n  ]\n}',
+        summary: 'List every API token, enabled or not. The token value is never returned — only metadata.',
+        response: '{\n  "success": true,\n  "obj": [\n    {\n      "id": 1,\n      "name": "default",\n      "enabled": true,\n      "createdAt": 1736000000\n    }\n  ]\n}',
       },
       {
         method: 'POST',
         path: '/panel/setting/apiTokens/create',
-        summary: 'Mint a new API token. Name must be unique and 1-64 characters; the token string is server-generated.',
+        summary: 'Mint a new API token. Name must be unique and 1-64 characters; the token string is server-generated and returned only in this response — it is stored hashed and cannot be retrieved later.',
         params: [
           { name: 'name', in: 'body', type: 'string', desc: 'Human-readable label, e.g. "central-panel-a".' },
         ],
@@ -1068,7 +1120,7 @@ export const sections: readonly Section[] = [
       {
         method: 'GET',
         path: '/{clashPath}:subid',
-        summary: 'Return subscription as a Clash/Mihomo-compatible YAML config. Only when Clash subscription is enabled in settings. Default path: /clash/:subid.',
+        summary: 'Return subscription as a Clash/Mihomo-compatible YAML config, including configured global Clash routing rules. Only when Clash subscription is enabled in settings. Default path: /clash/:subid.',
         params: [
           { name: 'subid', in: 'path', type: 'string', desc: 'Client subscription ID.' },
         ],

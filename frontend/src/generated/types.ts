@@ -27,13 +27,16 @@ export interface AllSetting {
   ldapUserFilter: string;
   ldapVlessField: string;
   pageSize: number;
+  panelProxy: string;
   remarkModel: string;
   restartXrayOnClientDisable: boolean;
   sessionMaxAge: number;
   subAnnounce: string;
   subCertFile: string;
   subClashEnable: boolean;
+  subClashEnableRouting: boolean;
   subClashPath: string;
+  subClashRules: string;
   subClashURI: string;
   subDomain: string;
   subEmailInRemark: boolean;
@@ -41,9 +44,8 @@ export interface AllSetting {
   subEnableRouting: boolean;
   subEncrypt: boolean;
   subJsonEnable: boolean;
-  subJsonFragment: string;
+  subJsonFinalMask: string;
   subJsonMux: string;
-  subJsonNoises: string;
   subJsonPath: string;
   subJsonRules: string;
   subJsonURI: string;
@@ -113,13 +115,16 @@ export interface AllSettingView {
   ldapUserFilter: string;
   ldapVlessField: string;
   pageSize: number;
+  panelProxy: string;
   remarkModel: string;
   restartXrayOnClientDisable: boolean;
   sessionMaxAge: number;
   subAnnounce: string;
   subCertFile: string;
   subClashEnable: boolean;
+  subClashEnableRouting: boolean;
   subClashPath: string;
+  subClashRules: string;
   subClashURI: string;
   subDomain: string;
   subEmailInRemark: boolean;
@@ -127,9 +132,8 @@ export interface AllSettingView {
   subEnableRouting: boolean;
   subEncrypt: boolean;
   subJsonEnable: boolean;
-  subJsonFragment: string;
+  subJsonFinalMask: string;
   subJsonMux: string;
-  subJsonNoises: string;
   subJsonPath: string;
   subJsonRules: string;
   subJsonURI: string;
@@ -183,6 +187,7 @@ export interface Client {
   enable: boolean;
   expiryTime: number;
   flow?: string;
+  group?: string;
   id?: string;
   limitIp: number;
   password?: string;
@@ -210,6 +215,7 @@ export interface ClientRecord {
   enable: boolean;
   expiryTime: number;
   flow: string;
+  group: string;
   id: number;
   limitIp: number;
   password: string;
@@ -295,6 +301,7 @@ export interface InboundClientIps {
 export interface InboundFallback {
   alpn: string;
   childId: number;
+  dest: string;
   id: number;
   masterId: number;
   name: string;
@@ -315,6 +322,8 @@ export interface Node {
   apiToken: string;
   basePath: string;
   clientCount: number;
+  configDirty: boolean;
+  configDirtyAt: number;
   cpuPct: number;
   createdAt: number;
   depletedCount: number;
@@ -328,10 +337,12 @@ export interface Node {
   name: string;
   onlineCount: number;
   panelVersion: string;
+  pinnedCertSha256: string;
   port: number;
   remark: string;
   scheme: string;
   status: string;
+  tlsVerifyMode: string;
   updatedAt: number;
   uptimeSecs: number;
   xrayVersion: string;

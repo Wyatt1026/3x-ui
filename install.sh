@@ -218,6 +218,41 @@ EOF
     return 0
 }
 
+ensure_pg_client() {
+    if command -v pg_dump > /dev/null 2>&1 && command -v pg_restore > /dev/null 2>&1; then
+        return 0
+    fi
+    echo -e "${yellow}Installing PostgreSQL client tools (pg_dump/pg_restore) for in-panel backup...${plain}" >&2
+    case "${release}" in
+        ubuntu | debian | armbian)
+            apt-get update >&2 && apt-get install -y -q postgresql-client >&2 || return 1
+            ;;
+        fedora | amzn | virtuozzo | rhel | almalinux | rocky | ol)
+            dnf install -y -q postgresql >&2 || return 1
+            ;;
+        centos)
+            if [[ "${VERSION_ID}" =~ ^7 ]]; then
+                yum install -y postgresql >&2 || return 1
+            else
+                dnf install -y -q postgresql >&2 || return 1
+            fi
+            ;;
+        arch | manjaro | parch)
+            pacman -Sy --noconfirm postgresql >&2 || return 1
+            ;;
+        opensuse-tumbleweed | opensuse-leap)
+            zypper -q install -y postgresql >&2 || return 1
+            ;;
+        alpine)
+            apk add --no-cache postgresql-client >&2 || return 1
+            ;;
+        *)
+            return 1
+            ;;
+    esac
+    command -v pg_dump > /dev/null 2>&1 && command -v pg_restore > /dev/null 2>&1
+}
+
 install_acme() {
     echo -e "${green}Installing acme.sh for SSL certificate management...${plain}"
     cd ~ || return 1
@@ -348,7 +383,7 @@ setup_ssl_certificate() {
     if [ $? -ne 0 ]; then
         echo -e "${yellow}Failed to issue certificate for ${domain}${plain}"
         echo -e "${yellow}Please ensure port 80 is open and try again later with: x-ui${plain}"
-        rm -rf ~/.acme.sh/${domain} 2> /dev/null
+        rm -rf ~/.acme.sh/${domain} ~/.acme.sh/${domain}_ecc 2> /dev/null
         rm -rf "$certPath" 2> /dev/null
         return 1
     fi
@@ -490,8 +525,8 @@ setup_ip_certificate() {
         echo -e "${red}Failed to issue IP certificate${plain}"
         echo -e "${yellow}Please ensure port ${WebPort} is reachable (or forwarded from external port 80)${plain}"
         # Cleanup acme.sh data for both IPv4 and IPv6 if specified
-        rm -rf ~/.acme.sh/${ipv4} 2> /dev/null
-        [[ -n "$ipv6" ]] && rm -rf ~/.acme.sh/${ipv6} 2> /dev/null
+        rm -rf ~/.acme.sh/${ipv4} ~/.acme.sh/${ipv4}_ecc 2> /dev/null
+        [[ -n "$ipv6" ]] && rm -rf ~/.acme.sh/${ipv6} ~/.acme.sh/${ipv6}_ecc 2> /dev/null
         rm -rf ${certDir} 2> /dev/null
         return 1
     fi
@@ -510,8 +545,8 @@ setup_ip_certificate() {
     if [[ ! -f "${certDir}/fullchain.pem" || ! -f "${certDir}/privkey.pem" ]]; then
         echo -e "${red}Certificate files not found after installation${plain}"
         # Cleanup acme.sh data for both IPv4 and IPv6 if specified
-        rm -rf ~/.acme.sh/${ipv4} 2> /dev/null
-        [[ -n "$ipv6" ]] && rm -rf ~/.acme.sh/${ipv6} 2> /dev/null
+        rm -rf ~/.acme.sh/${ipv4} ~/.acme.sh/${ipv4}_ecc 2> /dev/null
+        [[ -n "$ipv6" ]] && rm -rf ~/.acme.sh/${ipv6} ~/.acme.sh/${ipv6}_ecc 2> /dev/null
         rm -rf ${certDir} 2> /dev/null
         return 1
     fi
@@ -590,20 +625,36 @@ ssl_cert_issue() {
     echo -e "${green}Your domain is: ${domain}, checking it...${plain}"
     SSL_ISSUED_DOMAIN="${domain}"
 
-    # detect existing certificate and reuse it if present
+    # detect existing certificate and reuse it only if its files are actually
+    # present and non-empty. acme.sh stores ECC certs under ${domain}_ecc and RSA
+    # certs under ${domain}; a failed issuance can leave a domain entry in --list
+    # with no usable cert files, which must not be reused (it produces a 0-byte
+    # fullchain.pem). Broken partial state is cleaned up so issuance can proceed.
     local cert_exists=0
     local reissue_existing=0
     if ~/.acme.sh/acme.sh --list 2> /dev/null | awk '{print $1}' | grep -Fxq "${domain}"; then
-        cert_exists=1
-        local certInfo=$(~/.acme.sh/acme.sh --list 2> /dev/null | grep -F "${domain}")
-        echo -e "${yellow}Existing certificate found for ${domain}, will reuse it.${plain}"
-        [[ -n "${certInfo}" ]] && echo "$certInfo"
-        read -rp "Issue a new certificate from ${ACME_CA_NAME} instead of reusing it? (y/n): " reissueCert
-        if [[ "${reissueCert}" == "y" || "${reissueCert}" == "Y" ]]; then
-            cert_exists=0
-            reissue_existing=1
+        local acmeCertDir=""
+        if [[ -s ~/.acme.sh/${domain}_ecc/fullchain.cer && -s ~/.acme.sh/${domain}_ecc/${domain}.key ]]; then
+            acmeCertDir=~/.acme.sh/${domain}_ecc
+        elif [[ -s ~/.acme.sh/${domain}/fullchain.cer && -s ~/.acme.sh/${domain}/${domain}.key ]]; then
+            acmeCertDir=~/.acme.sh/${domain}
         fi
-    else
+        if [[ -n "${acmeCertDir}" ]]; then
+            cert_exists=1
+            local certInfo=$(~/.acme.sh/acme.sh --list 2> /dev/null | grep -F "${domain}")
+            echo -e "${yellow}Existing certificate found for ${domain}, will reuse it.${plain}"
+            [[ -n "${certInfo}" ]] && echo "$certInfo"
+            read -rp "Issue a new certificate from ${ACME_CA_NAME} instead of reusing it? (y/n): " reissueCert
+            if [[ "${reissueCert}" == "y" || "${reissueCert}" == "Y" ]]; then
+                cert_exists=0
+                reissue_existing=1
+            fi
+        else
+            echo -e "${yellow}Found incomplete acme.sh state for ${domain} (no valid certificate files); cleaning it up and re-issuing.${plain}"
+            rm -rf ~/.acme.sh/${domain} ~/.acme.sh/${domain}_ecc
+        fi
+    fi
+    if [[ ${cert_exists} -eq 0 ]]; then
         echo -e "${green}Your domain is ready for issuing certificates from ${ACME_CA_NAME} now...${plain}"
     fi
 
@@ -630,7 +681,7 @@ ssl_cert_issue() {
         if [ $? -ne 0 ]; then
             echo -e "${red}Issuing certificate failed, please check logs.${plain}"
             if [[ ${reissue_existing} -eq 0 ]]; then
-                rm -rf ~/.acme.sh/${domain}
+                rm -rf ~/.acme.sh/${domain} ~/.acme.sh/${domain}_ecc
             fi
             systemctl start x-ui 2> /dev/null || rc-service x-ui start 2> /dev/null
             return 1
@@ -685,7 +736,7 @@ ssl_cert_issue() {
     else
         echo -e "${red}Installing certificate failed, exiting.${plain}"
         if [[ ${cert_exists} -eq 0 && ${reissue_existing} -eq 0 ]]; then
-            rm -rf ~/.acme.sh/${domain}
+            rm -rf ~/.acme.sh/${domain} ~/.acme.sh/${domain}_ecc
         fi
         systemctl start x-ui 2> /dev/null || rc-service x-ui start 2> /dev/null
         return 1
@@ -1045,6 +1096,7 @@ EOF
                     umask 022
                     export XUI_DB_TYPE=postgres
                     export XUI_DB_DSN="${xui_dsn}"
+                    ensure_pg_client || echo -e "${yellow}⚠ Could not install pg_dump/pg_restore. In-panel database backup/restore will be unavailable until you install the postgresql-client package.${plain}"
                 fi
             fi
 
@@ -1090,6 +1142,13 @@ EOF
                 echo -e "${yellow}⚠ SSL Certificate: Enabled and configured${plain}"
             else
                 echo -e "${yellow}⚠ SSL Certificate: Skipped — panel is HTTP-only. Use a reverse proxy or SSH tunnel.${plain}"
+            fi
+
+            if [[ "$db_choice" == "2" ]]; then
+                echo ""
+                echo -e "${green}PostgreSQL backup & restore is built into the panel:${plain}"
+                echo -e "  ${blue}${SSL_SCHEME}://${SSL_HOST}:${config_port}/${config_webBasePath}${plain} → Backup & Restore"
+                echo -e "${yellow}  Back Up downloads a pg_dump .dump file; Restore reloads it via pg_restore.${plain}"
             fi
 
             if [[ "$db_choice" == "2" && "$pg_local_installed" == "1" ]]; then

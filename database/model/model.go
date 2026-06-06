@@ -55,13 +55,21 @@ type Inbound struct {
 
 	// Xray configuration fields
 	Listen         string   `json:"listen" form:"listen"`
-	Port           int      `json:"port" form:"port" validate:"gte=1,lte=65535"`
-	Protocol       Protocol `json:"protocol" form:"protocol" validate:"required,oneof=vmess vless trojan shadowsocks wireguard hysteria http mixed tunnel"`
+	Port           int      `json:"port" form:"port" validate:"gte=0,lte=65535"`
+	Protocol       Protocol `json:"protocol" form:"protocol" validate:"required,oneof=vmess vless trojan shadowsocks wireguard hysteria http mixed tunnel tun"`
 	Settings       string   `json:"settings" form:"settings"`
 	StreamSettings string   `json:"streamSettings" form:"streamSettings"`
 	Tag            string   `json:"tag" form:"tag" gorm:"unique"`
 	Sniffing       string   `json:"sniffing" form:"sniffing"`
 	NodeID         *int     `json:"nodeId,omitempty" form:"nodeId" gorm:"index"`
+
+	// OriginNodeGuid is the panelGuid of the node that physically hosts this
+	// inbound, propagated up across hops (#4983). Empty for an inbound that
+	// lives on this panel's own xray; set to the originating node's GUID when
+	// the inbound was synced from a node (kept as-is across further hops). Lets
+	// the master attribute a deeply nested inbound to the real node instead of
+	// the intermediate one it was fetched through.
+	OriginNodeGuid string `json:"originNodeGuid,omitempty" form:"originNodeGuid" gorm:"column:origin_node_guid;index"`
 
 	// FallbackParent is populated by the API layer when this inbound is
 	// attached as a fallback child of a VLESS/Trojan TCP-TLS master.
@@ -138,7 +146,7 @@ type HistoryOfSeeders struct {
 type ApiToken struct {
 	Id        int    `json:"id" gorm:"primaryKey;autoIncrement"`
 	Name      string `json:"name" gorm:"uniqueIndex;not null"`
-	Token     string `json:"token" gorm:"not null"`
+	Token     string `json:"token" gorm:"not null"` // SHA-256 hash; the plaintext is shown only once at creation
 	Enabled   bool   `json:"enabled" gorm:"default:true"`
 	CreatedAt int64  `json:"createdAt" gorm:"autoCreateTime:milli"`
 }
@@ -307,6 +315,7 @@ func StripVlessInboundEncryption(settings string) (string, bool) {
 //     inbound with "users must have empty method" when a client carries
 //     one — strip stale entries left over from a switch off a legacy
 //     cipher.
+//
 // Returns the rewritten settings string and true when anything changed.
 func HealShadowsocksClientMethods(settings string) (string, bool) {
 	if settings == "" {
@@ -379,6 +388,15 @@ type Node struct {
 	ApiToken            string `json:"apiToken" form:"apiToken" validate:"required"`
 	Enable              bool   `json:"enable" form:"enable" gorm:"default:true"`
 	AllowPrivateAddress bool   `json:"allowPrivateAddress" form:"allowPrivateAddress" gorm:"default:false"`
+	TlsVerifyMode       string `json:"tlsVerifyMode" form:"tlsVerifyMode" gorm:"column:tls_verify_mode;default:verify" validate:"omitempty,oneof=verify skip pin"`
+	PinnedCertSha256    string `json:"pinnedCertSha256" form:"pinnedCertSha256" gorm:"column:pinned_cert_sha256"`
+
+	// Guid is the remote panel's stable self-identifier (its panelGuid),
+	// learned from each heartbeat. It is the globally stable node identity used
+	// to attribute online clients/inbounds to the physical node across a chain
+	// of nodes (#4983); panel-local autoincrement ids don't survive a hop.
+	// Observed-state only — never user-edited.
+	Guid string `json:"guid" gorm:"column:guid;index"`
 
 	// Heartbeat-updated fields. UpdatedAt advances on every probe even when
 	// the row is otherwise unchanged so the UI's "last seen" tooltip is
@@ -393,13 +411,42 @@ type Node struct {
 	UptimeSecs    uint64  `json:"uptimeSecs"`
 	LastError     string  `json:"lastError"`
 
+	ConfigDirty   bool  `json:"configDirty" gorm:"default:false"`
+	ConfigDirtyAt int64 `json:"configDirtyAt"`
+
 	InboundCount  int `json:"inboundCount" gorm:"-"`
 	ClientCount   int `json:"clientCount" gorm:"-"`
 	OnlineCount   int `json:"onlineCount" gorm:"-"`
 	DepletedCount int `json:"depletedCount" gorm:"-"`
 
+	// ParentGuid + Transitive are set only when a node is surfaced as part of a
+	// node tree (#4983): direct nodes carry the master panel's own GUID, a
+	// transitive sub-node carries its parent node's GUID. Transitive nodes are
+	// read-only projections (Id == 0, not persisted) — never edited or deployed.
+	ParentGuid string `json:"parentGuid,omitempty" gorm:"-"`
+	Transitive bool   `json:"transitive,omitempty" gorm:"-"`
+
 	CreatedAt int64 `json:"createdAt" gorm:"autoCreateTime:milli"`
 	UpdatedAt int64 `json:"updatedAt" gorm:"autoUpdateTime:milli"`
+}
+
+// NodeSummary is the read-only identity of a node as published one hop up: the
+// view a panel exposes about the nodes it directly manages, so a master can
+// surface transitive sub-nodes in a chained topology (#4983). Counts are
+// computed by the consuming master from its own per-GUID data, never trusted
+// from the child, so this carries identity/health only.
+type NodeSummary struct {
+	Guid          string `json:"guid"`
+	ParentGuid    string `json:"parentGuid"`
+	Name          string `json:"name"`
+	Address       string `json:"address"`
+	Scheme        string `json:"scheme"`
+	Port          int    `json:"port"`
+	Status        string `json:"status"`
+	LastHeartbeat int64  `json:"lastHeartbeat"`
+	LatencyMs     int    `json:"latencyMs"`
+	PanelVersion  string `json:"panelVersion"`
+	XrayVersion   string `json:"xrayVersion"`
 }
 
 type CustomGeoResource struct {

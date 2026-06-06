@@ -15,7 +15,9 @@ import {
 import type { BadgeProps } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
 import {
+  ApartmentOutlined,
   ClusterOutlined,
+  CloudDownloadOutlined,
   DeleteOutlined,
   EditOutlined,
   ExclamationCircleOutlined,
@@ -30,22 +32,32 @@ import {
 
 import NodeHistoryPanel from './NodeHistoryPanel';
 import type { NodeRecord } from '@/api/queries/useNodesQuery';
+import { isPanelUpdateAvailable } from '@/lib/panel-version';
 import './NodeList.css';
 
 interface NodeListProps {
   nodes: NodeRecord[];
   loading?: boolean;
   isMobile?: boolean;
+  latestVersion?: string;
+  selectedIds: number[];
+  onSelectionChange: (ids: number[]) => void;
   onAdd: () => void;
   onEdit: (node: NodeRecord) => void;
   onDelete: (node: NodeRecord) => void;
   onProbe: (node: NodeRecord) => void;
   onToggleEnable: (node: NodeRecord, next: boolean) => void;
+  onUpdateNode: (node: NodeRecord) => void;
+  onUpdateSelected: () => void;
+}
+
+function isUpdateEligible(n: NodeRecord): boolean {
+  return !!n.enable && n.status === 'online';
 }
 
 interface NodeRow extends NodeRecord {
   url: string;
-  key: number;
+  key: string | number;
 }
 
 function badgeStatus(status?: string): BadgeProps['status'] {
@@ -54,6 +66,20 @@ function badgeStatus(status?: string): BadgeProps['status'] {
     case 'offline': return 'error';
     default: return 'default';
   }
+}
+
+function StatusDot({ status }: { status?: string }) {
+  if (status === 'online') return <span className="online-dot" />;
+  return <Badge status={badgeStatus(status)} />;
+}
+
+function StatusLabel({ status }: { status?: string }) {
+  const { t } = useTranslation();
+  return (
+    <span style={status === 'online' ? { color: 'var(--ant-color-success)' } : undefined}>
+      {t(`pages.nodes.statusValues.${status || 'unknown'}`)}
+    </span>
+  );
 }
 
 function formatPct(p?: number): string {
@@ -88,11 +114,16 @@ export default function NodeList({
   nodes,
   loading = false,
   isMobile = false,
+  latestVersion = '',
+  selectedIds,
+  onSelectionChange,
   onAdd,
   onEdit,
   onDelete,
   onProbe,
   onToggleEnable,
+  onUpdateNode,
+  onUpdateSelected,
 }: NodeListProps) {
   const { t } = useTranslation();
   const relativeTime = useRelativeTime();
@@ -101,14 +132,49 @@ export default function NodeList({
   const [statsNode, setStatsNode] = useState<NodeRow | null>(null);
   const [expandedIds, setExpandedIds] = useState<Set<number>>(new Set());
 
-  const dataSource = useMemo<NodeRow[]>(
-    () => nodes.map((n) => ({
+  // Map a node GUID to its display name so a transitive sub-node can show which
+  // parent it is reached through (#4983).
+  const nameByGuid = useMemo(() => {
+    const m = new Map<string, string>();
+    for (const n of nodes) if (n.guid) m.set(n.guid, n.name || n.guid);
+    return m;
+  }, [nodes]);
+
+  // Order direct nodes first, each immediately followed by its transitive
+  // sub-nodes, so the table reads as a parent -> child tree without colliding
+  // with the per-row history expander (transitive nodes carry id 0).
+  const dataSource = useMemo<NodeRow[]>(() => {
+    const toRow = (n: NodeRecord): NodeRow => ({
       ...n,
       url: `${n.scheme}://${n.address}:${n.port}${n.basePath || '/'}`,
-      key: n.id,
-    })),
-    [nodes],
-  );
+      key: n.transitive ? `t-${n.guid || ''}` : n.id,
+    });
+    const childrenByParent = new Map<string, NodeRecord[]>();
+    for (const n of nodes) {
+      if (n.transitive && n.parentGuid) {
+        const arr = childrenByParent.get(n.parentGuid) || [];
+        arr.push(n);
+        childrenByParent.set(n.parentGuid, arr);
+      }
+    }
+    const ordered: NodeRow[] = [];
+    const added = new Set<string>();
+    const push = (n: NodeRecord) => {
+      const row = toRow(n);
+      ordered.push(row);
+      added.add(String(row.key));
+    };
+    for (const n of nodes) {
+      if (n.transitive) continue;
+      push(n);
+      if (n.guid) for (const child of childrenByParent.get(n.guid) || []) push(child);
+    }
+    // Transitive nodes whose parent isn't in the list still get shown.
+    for (const n of nodes) {
+      if (n.transitive && !added.has(`t-${n.guid || ''}`)) push(n);
+    }
+    return ordered;
+  }, [nodes]);
 
   function toggleExpanded(id: number) {
     setExpandedIds((prev) => {
@@ -122,12 +188,21 @@ export default function NodeList({
     {
       title: t('pages.nodes.actions'),
       align: 'center',
-      width: 160,
-      render: (_value, record) => (
+      width: 190,
+      render: (_value, record) => record.transitive ? (
+        <Tooltip title={t('pages.nodes.subNodeTip', { parent: record.parentGuid ? (nameByGuid.get(record.parentGuid) || '-') : '-' })}>
+          <Tag icon={<ApartmentOutlined />} style={{ margin: 0 }}>{t('pages.nodes.subNode')}</Tag>
+        </Tooltip>
+      ) : (
         <Space>
           <Tooltip title={t('pages.nodes.probe')}>
             <Button type="text" size="small" icon={<ThunderboltOutlined />} onClick={() => onProbe(record)} />
           </Tooltip>
+          {isUpdateEligible(record) && (
+            <Tooltip title={t('pages.nodes.updatePanel')}>
+              <Button type="text" size="small" icon={<CloudDownloadOutlined />} onClick={() => onUpdateNode(record)} />
+            </Tooltip>
+          )}
           <Tooltip title={t('edit')}>
             <Button type="text" size="small" icon={<EditOutlined />} onClick={() => onEdit(record)} />
           </Tooltip>
@@ -142,7 +217,9 @@ export default function NodeList({
       dataIndex: 'enable',
       align: 'center',
       width: 80,
-      render: (_value, record) => (
+      render: (_value, record) => record.transitive ? (
+        <span style={{ opacity: 0.4 }}>—</span>
+      ) : (
         <Switch
           checked={!!record.enable}
           size="small"
@@ -155,8 +232,11 @@ export default function NodeList({
       dataIndex: 'name',
       ellipsis: true,
       render: (_value, record) => (
-        <div className="name-cell">
-          <span className="name">{record.name}</span>
+        <div className="name-cell" style={record.transitive ? { paddingInlineStart: 20 } : undefined}>
+          <span className="name">
+            {record.transitive && <ApartmentOutlined style={{ marginInlineEnd: 6, opacity: 0.6 }} />}
+            {record.name}
+          </span>
           {record.remark && <span className="remark">{record.remark}</span>}
         </div>
       ),
@@ -193,8 +273,8 @@ export default function NodeList({
       align: 'center',
       render: (_value, record) => (
         <Space size={4}>
-          <Badge status={badgeStatus(record.status)} />
-          <span>{t(`pages.nodes.statusValues.${record.status || 'unknown'}`)}</span>
+          <StatusDot status={record.status} />
+          <StatusLabel status={record.status} />
           {record.lastError && (
             <Tooltip title={record.lastError}>
               <ExclamationCircleOutlined style={{ color: 'var(--ant-color-warning)' }} />
@@ -227,7 +307,22 @@ export default function NodeList({
       title: t('pages.nodes.panelVersion') || 'Panel version',
       dataIndex: 'panelVersion',
       align: 'center',
-      render: (_value, record) => record.panelVersion || '-',
+      render: (_value, record) => {
+        const canUpdate = isUpdateEligible(record)
+          && isPanelUpdateAvailable(latestVersion, record.panelVersion || '');
+        return (
+          <Space size={4}>
+            <span>{record.panelVersion || '-'}</span>
+            {canUpdate && (
+              <Tooltip title={`${t('pages.nodes.updateAvailable')}: ${latestVersion}`}>
+                <Tag color="orange" style={{ margin: 0, cursor: 'pointer' }} onClick={() => onUpdateNode(record)}>
+                  {t('pages.nodes.updateAvailable')}
+                </Tag>
+              </Tooltip>
+            )}
+          </Space>
+        );
+      },
     },
     {
       title: t('pages.nodes.uptime'),
@@ -266,7 +361,7 @@ export default function NodeList({
       width: 120,
       render: (_value, record) => relativeTime(record.lastHeartbeat),
     },
-  ], [t, showAddress, relativeTime, onToggleEnable, onProbe, onEdit, onDelete]);
+  ], [t, showAddress, relativeTime, latestVersion, onToggleEnable, onProbe, onEdit, onDelete, onUpdateNode, nameByGuid]);
 
   return (
     <Card size="small" hoverable>
@@ -274,6 +369,11 @@ export default function NodeList({
         <Button type="primary" icon={<PlusOutlined />} onClick={onAdd}>
           {t('pages.nodes.addNode')}
         </Button>
+        {selectedIds.length > 0 && (
+          <Button icon={<CloudDownloadOutlined />} onClick={onUpdateSelected}>
+            {t('pages.nodes.updateSelected', { count: selectedIds.length })}
+          </Button>
+        )}
       </div>
 
       {isMobile ? (
@@ -285,11 +385,22 @@ export default function NodeList({
                 <div>{t('noData')}</div>
               </div>
             ) : (
-              dataSource.map((record) => (
+              dataSource.map((record) => record.transitive ? (
+                <div key={String(record.key)} className="node-card" style={{ paddingInlineStart: 16, opacity: 0.85 }}>
+                  <div className="card-head">
+                    <ApartmentOutlined style={{ opacity: 0.6 }} />
+                    <StatusDot status={record.status} />
+                    <span className="node-name">{record.name}</span>
+                    <div className="card-actions">
+                      <Tag icon={<ApartmentOutlined />} style={{ margin: 0 }}>{t('pages.nodes.subNode')}</Tag>
+                    </div>
+                  </div>
+                </div>
+              ) : (
                 <div key={record.id} className="node-card">
                   <div className="card-head" onClick={() => toggleExpanded(record.id)}>
                     <RightOutlined className={`card-expand${expandedIds.has(record.id) ? ' is-expanded' : ''}`} />
-                    <Badge status={badgeStatus(record.status)} />
+                    <StatusDot status={record.status} />
                     <span className="node-name">{record.name}</span>
                     <div className="card-actions" onClick={(e) => e.stopPropagation()}>
                       <Tooltip title={t('info')}>
@@ -313,6 +424,11 @@ export default function NodeList({
                               label: <><ThunderboltOutlined /> {t('pages.nodes.probe')}</>,
                               onClick: () => onProbe(record),
                             },
+                            ...(isUpdateEligible(record) ? [{
+                              key: 'update',
+                              label: <><CloudDownloadOutlined /> {t('pages.nodes.updatePanel')}</>,
+                              onClick: () => onUpdateNode(record),
+                            }] : []),
                             {
                               key: 'edit',
                               label: <><EditOutlined /> {t('edit')}</>,
@@ -378,8 +494,8 @@ export default function NodeList({
                 </div>
                 <div className="stat-row">
                   <span className="stat-label">{t('pages.nodes.status')}</span>
-                  <Badge status={badgeStatus(statsNode.status)} />
-                  <span>{t(`pages.nodes.statusValues.${statsNode.status || 'unknown'}`)}</span>
+                  <StatusDot status={statsNode.status} />
+                  <StatusLabel status={statsNode.status} />
                   {statsNode.lastError && (
                     <Tooltip title={statsNode.lastError}>
                       <ExclamationCircleOutlined style={{ color: 'var(--ant-color-warning)' }} />
@@ -439,6 +555,11 @@ export default function NodeList({
           scroll={{ x: 'max-content' }}
           size="middle"
           rowKey="id"
+          rowSelection={dataSource.length > 1 ? {
+            selectedRowKeys: selectedIds,
+            onChange: (keys) => onSelectionChange(keys.filter((k) => typeof k === 'number') as number[]),
+            getCheckboxProps: (record) => ({ disabled: !!record.transitive || !isUpdateEligible(record) }),
+          } : undefined}
           locale={{
             emptyText: (
               <div className="card-empty">
@@ -449,6 +570,7 @@ export default function NodeList({
           }}
           expandable={{
             expandedRowRender: (record) => <NodeHistoryPanel node={record} />,
+            rowExpandable: (record) => !record.transitive,
           }}
         />
       )}

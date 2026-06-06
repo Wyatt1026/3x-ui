@@ -42,6 +42,7 @@ import {
   SERVER_PROTOCOLS,
 } from './outbound-form-constants';
 import {
+  applyNetworkChange,
   buildAddModeValues,
   hysteriaStreamSlice,
   newStreamSlice,
@@ -168,7 +169,7 @@ export default function OutboundFormModal({
     if (existing.hysteriaSettings) slice.hysteriaSettings = existing.hysteriaSettings;
     if (existing.tlsSettings) slice.tlsSettings = existing.tlsSettings;
     form.setFieldValue('streamSettings', slice);
-  }, [protocol, network, security]);
+  }, [protocol, network, security, form]);
 
   const wgSecretKey = Form.useWatch(['settings', 'secretKey'], form) as string | undefined;
   useEffect(() => {
@@ -231,20 +232,8 @@ export default function OutboundFormModal({
   // wsSettings, etc.) so the DU branch matches. Preserve security if
   // the new network supports it, otherwise force back to 'none'.
   function onNetworkChange(next: string) {
-    if (next === 'hysteria') {
-      form.setFieldValue('streamSettings', hysteriaStreamSlice());
-      return;
-    }
-    const currentSecurity = form.getFieldValue(['streamSettings', 'security']) ?? 'none';
-    const stillAllowed = canEnableTls({ protocol, streamSettings: { network: next, security: currentSecurity } });
-    const stillReality = canEnableReality({ protocol, streamSettings: { network: next, security: currentSecurity } });
-    const newSecurity =
-      currentSecurity === 'tls' && !stillAllowed
-        ? 'none'
-        : currentSecurity === 'reality' && !stillReality
-          ? 'none'
-          : currentSecurity;
-    form.setFieldValue('streamSettings', { ...newStreamSlice(next), security: newSecurity });
+    const stream = (form.getFieldValue('streamSettings') ?? {}) as Record<string, unknown>;
+    form.setFieldValue('streamSettings', applyNetworkChange(protocol, stream, next));
   }
 
   function onXmuxToggle(checked: boolean) {
@@ -361,6 +350,7 @@ export default function OutboundFormModal({
           colon={false}
           labelCol={{ md: { span: 8 } }}
           wrapperCol={{ md: { span: 14 } }}
+          labelWrap
           onValuesChange={onValuesChange}
         >
           <Tabs
@@ -575,7 +565,9 @@ export default function OutboundFormModal({
 
                     {security === 'reality' && realityAllowed && <RealityForm />}
 
-                    {((streamAllowed && network) || !streamAllowed) && <SockoptForm form={form} />}
+                    {((streamAllowed && network) || !streamAllowed) && (
+                      <SockoptForm form={form} outboundTags={existingTags} />
+                    )}
 
                     <FinalMaskForm
                       name={['streamSettings', 'finalmask']}

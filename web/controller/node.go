@@ -2,6 +2,7 @@ package controller
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"slices"
 	"strconv"
@@ -27,6 +28,7 @@ func NewNodeController(g *gin.RouterGroup) *NodeController {
 func (a *NodeController) initRouter(g *gin.RouterGroup) {
 	g.GET("/list", a.list)
 	g.GET("/get/:id", a.get)
+	g.GET("/webCert/:id", a.webCert)
 
 	g.POST("/add", a.add)
 	g.POST("/update/:id", a.update)
@@ -34,12 +36,14 @@ func (a *NodeController) initRouter(g *gin.RouterGroup) {
 	g.POST("/setEnable/:id", a.setEnable)
 
 	g.POST("/test", a.test)
+	g.POST("/certFingerprint", a.certFingerprint)
 	g.POST("/probe/:id", a.probe)
+	g.POST("/updatePanel", a.updatePanel)
 	g.GET("/history/:id/:metric/:bucket", a.history)
 }
 
 func (a *NodeController) list(c *gin.Context) {
-	nodes, err := a.nodeService.GetAll()
+	nodes, err := a.nodeService.GetNodeTree()
 	if err != nil {
 		jsonMsg(c, I18nWeb(c, "pages.nodes.toasts.list"), err)
 		return
@@ -61,9 +65,38 @@ func (a *NodeController) get(c *gin.Context) {
 	jsonObj(c, n, nil)
 }
 
+// webCert returns the node's own web TLS certificate/key file paths so the
+// inbound form's "Set Cert from Panel" can fill paths that exist on the node.
+func (a *NodeController) webCert(c *gin.Context) {
+	id, err := strconv.Atoi(c.Param("id"))
+	if err != nil {
+		jsonMsg(c, I18nWeb(c, "get"), err)
+		return
+	}
+	files, err := a.nodeService.GetWebCertFiles(id)
+	if err != nil {
+		jsonMsg(c, I18nWeb(c, "pages.nodes.toasts.obtain"), err)
+		return
+	}
+	jsonObj(c, files, nil)
+}
+
+func (a *NodeController) ensureReachable(c *gin.Context, n *model.Node) error {
+	ctx, cancel := context.WithTimeout(c.Request.Context(), 6*time.Second)
+	defer cancel()
+	if _, err := a.nodeService.Probe(ctx, n); err != nil {
+		return errors.New(service.FriendlyProbeError(err.Error()))
+	}
+	return nil
+}
+
 func (a *NodeController) add(c *gin.Context) {
 	n, ok := middleware.BindAndValidate[model.Node](c)
 	if !ok {
+		return
+	}
+	if err := a.ensureReachable(c, n); err != nil {
+		jsonMsg(c, I18nWeb(c, "pages.nodes.toasts.add"), err)
 		return
 	}
 	if err := a.nodeService.Create(n); err != nil {
@@ -81,6 +114,10 @@ func (a *NodeController) update(c *gin.Context) {
 	}
 	n, ok := middleware.BindAndValidate[model.Node](c)
 	if !ok {
+		return
+	}
+	if err := a.ensureReachable(c, n); err != nil {
+		jsonMsg(c, I18nWeb(c, "pages.nodes.toasts.update"), err)
 		return
 	}
 	if err := a.nodeService.Update(id, n); err != nil {
@@ -142,6 +179,29 @@ func (a *NodeController) test(c *gin.Context) {
 	jsonObj(c, patch.ToUI(err == nil), nil)
 }
 
+func (a *NodeController) certFingerprint(c *gin.Context) {
+	n := &model.Node{}
+	if err := c.ShouldBind(n); err != nil {
+		jsonMsg(c, I18nWeb(c, "pages.nodes.toasts.test"), err)
+		return
+	}
+	if n.Scheme == "" {
+		n.Scheme = "https"
+	}
+	if n.BasePath == "" {
+		n.BasePath = "/"
+	}
+
+	ctx, cancel := context.WithTimeout(c.Request.Context(), 6*time.Second)
+	defer cancel()
+	fp, err := a.nodeService.FetchCertFingerprint(ctx, n)
+	if err != nil {
+		jsonMsg(c, I18nWeb(c, "pages.nodes.toasts.test"), err)
+		return
+	}
+	jsonObj(c, fp, nil)
+}
+
 func (a *NodeController) probe(c *gin.Context) {
 	id, err := strconv.Atoi(c.Param("id"))
 	if err != nil {
@@ -163,6 +223,22 @@ func (a *NodeController) probe(c *gin.Context) {
 	}
 	_ = a.nodeService.UpdateHeartbeat(id, patch)
 	jsonObj(c, patch.ToUI(probeErr == nil), nil)
+}
+
+func (a *NodeController) updatePanel(c *gin.Context) {
+	var req struct {
+		Ids []int `json:"ids"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		jsonMsg(c, I18nWeb(c, "somethingWentWrong"), err)
+		return
+	}
+	if len(req.Ids) == 0 {
+		jsonMsg(c, I18nWeb(c, "somethingWentWrong"), fmt.Errorf("no nodes selected"))
+		return
+	}
+	results, err := a.nodeService.UpdatePanels(req.Ids)
+	jsonMsgObj(c, I18nWeb(c, "pages.nodes.toasts.updateStarted"), results, err)
 }
 
 func (a *NodeController) history(c *gin.Context) {

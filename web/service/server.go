@@ -9,6 +9,7 @@ import (
 	"io"
 	"mime/multipart"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -66,23 +67,36 @@ type Status struct {
 		Current uint64 `json:"current"`
 		Total   uint64 `json:"total"`
 	} `json:"disk"`
+	DiskIO struct {
+		Read  uint64 `json:"read"`
+		Write uint64 `json:"write"`
+	} `json:"diskIO"`
+	DiskTraffic struct {
+		Read  uint64 `json:"read"`
+		Write uint64 `json:"write"`
+	} `json:"diskTraffic"`
 	Xray struct {
 		State    ProcessState `json:"state"`
 		ErrorMsg string       `json:"errorMsg"`
 		Version  string       `json:"version"`
 	} `json:"xray"`
 	PanelVersion string    `json:"panelVersion"`
+	PanelGuid    string    `json:"panelGuid"`
 	Uptime       uint64    `json:"uptime"`
 	Loads        []float64 `json:"loads"`
 	TcpCount     int       `json:"tcpCount"`
 	UdpCount     int       `json:"udpCount"`
 	NetIO        struct {
-		Up   uint64 `json:"up"`
-		Down uint64 `json:"down"`
+		Up      uint64 `json:"up"`
+		Down    uint64 `json:"down"`
+		PktUp   uint64 `json:"pktUp"`
+		PktDown uint64 `json:"pktDown"`
 	} `json:"netIO"`
 	NetTraffic struct {
-		Sent uint64 `json:"sent"`
-		Recv uint64 `json:"recv"`
+		Sent    uint64 `json:"sent"`
+		Recv    uint64 `json:"recv"`
+		PktSent uint64 `json:"pktSent"`
+		PktRecv uint64 `json:"pktRecv"`
 	} `json:"netTraffic"`
 	PublicIP struct {
 		IPv4 string `json:"ipv4"`
@@ -382,6 +396,30 @@ func (s *ServerService) GetStatus(lastStatus *Status) *Status {
 		status.Disk.Total = diskInfo.Total
 	}
 
+	diskIOStats, err := disk.IOCounters()
+	if err != nil {
+		logger.Warning("get disk io counters failed:", err)
+	} else {
+		var totalRead, totalWrite uint64
+		for _, counter := range diskIOStats {
+			totalRead += counter.ReadBytes
+			totalWrite += counter.WriteBytes
+		}
+		status.DiskTraffic.Read = totalRead
+		status.DiskTraffic.Write = totalWrite
+
+		if lastStatus != nil {
+			duration := now.Sub(lastStatus.T)
+			seconds := float64(duration) / float64(time.Second)
+			if seconds > 0 && status.DiskTraffic.Read >= lastStatus.DiskTraffic.Read {
+				status.DiskIO.Read = uint64(float64(status.DiskTraffic.Read-lastStatus.DiskTraffic.Read) / seconds)
+			}
+			if seconds > 0 && status.DiskTraffic.Write >= lastStatus.DiskTraffic.Write {
+				status.DiskIO.Write = uint64(float64(status.DiskTraffic.Write-lastStatus.DiskTraffic.Write) / seconds)
+			}
+		}
+	}
+
 	// Load averages
 	avgState, err := load.Avg()
 	if err != nil {
@@ -395,7 +433,7 @@ func (s *ServerService) GetStatus(lastStatus *Status) *Status {
 	if err != nil {
 		logger.Warning("get io counters failed:", err)
 	} else {
-		var totalSent, totalRecv uint64
+		var totalSent, totalRecv, totalPktSent, totalPktRecv uint64
 		for _, iface := range ioStats {
 			name := strings.ToLower(iface.Name)
 			if isVirtualInterface(name) {
@@ -403,9 +441,13 @@ func (s *ServerService) GetStatus(lastStatus *Status) *Status {
 			}
 			totalSent += iface.BytesSent
 			totalRecv += iface.BytesRecv
+			totalPktSent += iface.PacketsSent
+			totalPktRecv += iface.PacketsRecv
 		}
 		status.NetTraffic.Sent = totalSent
 		status.NetTraffic.Recv = totalRecv
+		status.NetTraffic.PktSent = totalPktSent
+		status.NetTraffic.PktRecv = totalPktRecv
 
 		if lastStatus != nil {
 			duration := now.Sub(lastStatus.T)
@@ -414,6 +456,12 @@ func (s *ServerService) GetStatus(lastStatus *Status) *Status {
 			down := uint64(float64(status.NetTraffic.Recv-lastStatus.NetTraffic.Recv) / seconds)
 			status.NetIO.Up = up
 			status.NetIO.Down = down
+			if seconds > 0 && status.NetTraffic.PktSent >= lastStatus.NetTraffic.PktSent {
+				status.NetIO.PktUp = uint64(float64(status.NetTraffic.PktSent-lastStatus.NetTraffic.PktSent) / seconds)
+			}
+			if seconds > 0 && status.NetTraffic.PktRecv >= lastStatus.NetTraffic.PktRecv {
+				status.NetIO.PktDown = uint64(float64(status.NetTraffic.PktRecv-lastStatus.NetTraffic.PktRecv) / seconds)
+			}
 		}
 	}
 
@@ -485,6 +533,9 @@ func (s *ServerService) GetStatus(lastStatus *Status) *Status {
 	}
 	status.Xray.Version = s.xrayService.GetXrayVersion()
 	status.PanelVersion = config.GetVersion()
+	if guid, err := s.settingService.GetPanelGuid(); err == nil {
+		status.PanelGuid = guid
+	}
 
 	// Application stats
 	var rtm runtime.MemStats
@@ -518,8 +569,22 @@ func (s *ServerService) AppendStatusSample(t time.Time, status *Status) {
 	if status.Mem.Total > 0 {
 		systemMetrics.append("mem", t, float64(status.Mem.Current)*100.0/float64(status.Mem.Total))
 	}
+	if status.Swap.Total > 0 {
+		systemMetrics.append("swap", t, float64(status.Swap.Current)*100.0/float64(status.Swap.Total))
+	} else {
+		systemMetrics.append("swap", t, 0)
+	}
 	systemMetrics.append("netUp", t, float64(status.NetIO.Up))
 	systemMetrics.append("netDown", t, float64(status.NetIO.Down))
+	systemMetrics.append("diskRead", t, float64(status.DiskIO.Read))
+	systemMetrics.append("diskWrite", t, float64(status.DiskIO.Write))
+	if status.Disk.Total > 0 {
+		systemMetrics.append("diskUsage", t, float64(status.Disk.Current)*100.0/float64(status.Disk.Total))
+	}
+	systemMetrics.append("pktUp", t, float64(status.NetIO.PktUp))
+	systemMetrics.append("pktDown", t, float64(status.NetIO.PktDown))
+	systemMetrics.append("tcpCount", t, float64(status.TcpCount))
+	systemMetrics.append("udpCount", t, float64(status.UdpCount))
 	online := 0
 	if p != nil && p.IsRunning() {
 		online = len(p.GetOnlineClients())
@@ -1071,6 +1136,9 @@ func (s *ServerService) GetConfigJson() (any, error) {
 }
 
 func (s *ServerService) GetDb() ([]byte, error) {
+	if database.IsPostgres() {
+		return s.exportPostgresDB()
+	}
 	// Update by manually trigger a checkpoint operation
 	err := database.Checkpoint()
 	if err != nil {
@@ -1092,7 +1160,45 @@ func (s *ServerService) GetDb() ([]byte, error) {
 	return fileContents, nil
 }
 
+// GetMigration produces a cross-engine migration file plus its filename: on a
+// SQLite panel it returns a portable .dump (SQL text), and on a PostgreSQL panel
+// it returns a .db SQLite database built from the live data. Either output can
+// then seed a panel running on the other backend.
+func (s *ServerService) GetMigration() ([]byte, string, error) {
+	if database.IsPostgres() {
+		tmp, err := os.CreateTemp("", "x-ui-migration-*.db")
+		if err != nil {
+			return nil, "", err
+		}
+		tmpPath := tmp.Name()
+		tmp.Close()
+		defer os.Remove(tmpPath)
+
+		if err := database.ExportPostgresToSQLite(config.GetDBDSN(), tmpPath); err != nil {
+			return nil, "", err
+		}
+		data, err := os.ReadFile(tmpPath)
+		if err != nil {
+			return nil, "", err
+		}
+		return data, "x-ui.db", nil
+	}
+
+	// SQLite panel: checkpoint so the .db reflects the latest writes, then dump.
+	if err := database.Checkpoint(); err != nil {
+		return nil, "", err
+	}
+	data, err := database.DumpSQLiteToBytes(config.GetDBPath())
+	if err != nil {
+		return nil, "", err
+	}
+	return data, "x-ui.dump", nil
+}
+
 func (s *ServerService) ImportDB(file multipart.File) error {
+	if database.IsPostgres() {
+		return s.importPostgresDB(file)
+	}
 	// Check if the file is a SQLite database
 	isValidDb, err := database.IsSQLiteDB(file)
 	if err != nil {
@@ -1218,6 +1324,137 @@ func (s *ServerService) ImportDB(file multipart.File) error {
 		return common.NewErrorf("Imported DB but failed to start Xray: %v", err)
 	}
 
+	return nil
+}
+
+// pgConnEnv turns the configured PostgreSQL DSN into the PG* environment used by
+// pg_dump/pg_restore, keeping the password out of the process argument list.
+func pgConnEnv(dsn string) (env []string, dbname string, err error) {
+	u, err := url.Parse(strings.TrimSpace(dsn))
+	if err != nil {
+		return nil, "", err
+	}
+	if u.Scheme != "postgres" && u.Scheme != "postgresql" {
+		return nil, "", common.NewErrorf("unsupported DSN scheme %q", u.Scheme)
+	}
+	dbname = strings.TrimPrefix(u.Path, "/")
+	if dbname == "" {
+		return nil, "", common.NewError("PostgreSQL DSN is missing a database name")
+	}
+	host := u.Hostname()
+	if host == "" {
+		host = "127.0.0.1"
+	}
+	port := u.Port()
+	if port == "" {
+		port = "5432"
+	}
+	env = append(os.Environ(), "PGHOST="+host, "PGPORT="+port, "PGDATABASE="+dbname)
+	if user := u.User.Username(); user != "" {
+		env = append(env, "PGUSER="+user)
+	}
+	if pass, ok := u.User.Password(); ok {
+		env = append(env, "PGPASSWORD="+pass)
+	}
+	if sslmode := u.Query().Get("sslmode"); sslmode != "" {
+		env = append(env, "PGSSLMODE="+sslmode)
+	}
+	return env, dbname, nil
+}
+
+func (s *ServerService) exportPostgresDB() ([]byte, error) {
+	bin, err := exec.LookPath("pg_dump")
+	if err != nil {
+		return nil, common.NewError("pg_dump not found on the server; install the postgresql-client package to back up a PostgreSQL database")
+	}
+	env, dbname, err := pgConnEnv(config.GetDBDSN())
+	if err != nil {
+		return nil, common.NewErrorf("invalid PostgreSQL DSN: %v", err)
+	}
+	cmd := exec.Command(bin, "--format=custom", "--no-owner", "--no-privileges", "--dbname", dbname)
+	cmd.Env = env
+	var out, stderr bytes.Buffer
+	cmd.Stdout = &out
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		return nil, common.NewErrorf("pg_dump failed: %v: %s", err, strings.TrimSpace(stderr.String()))
+	}
+	return out.Bytes(), nil
+}
+
+func (s *ServerService) importPostgresDB(file multipart.File) error {
+	header := make([]byte, 5)
+	if _, err := file.ReadAt(header, 0); err != nil {
+		return common.NewErrorf("Error reading dump file: %v", err)
+	}
+	if string(header) != "PGDMP" {
+		return common.NewError("Invalid file: expected a PostgreSQL custom-format dump (.dump) created by this panel's Back Up")
+	}
+	if _, err := file.Seek(0, 0); err != nil {
+		return common.NewErrorf("Error resetting file reader: %v", err)
+	}
+
+	bin, err := exec.LookPath("pg_restore")
+	if err != nil {
+		return common.NewError("pg_restore not found on the server; install the postgresql-client package to restore a PostgreSQL database")
+	}
+	env, dbname, err := pgConnEnv(config.GetDBDSN())
+	if err != nil {
+		return common.NewErrorf("invalid PostgreSQL DSN: %v", err)
+	}
+
+	tempFile, err := os.CreateTemp("", "x-ui-pg-restore-*.dump")
+	if err != nil {
+		return common.NewErrorf("Error creating temporary dump file: %v", err)
+	}
+	tempPath := tempFile.Name()
+	defer os.Remove(tempPath)
+	if _, err := io.Copy(tempFile, file); err != nil {
+		tempFile.Close()
+		return common.NewErrorf("Error saving dump: %v", err)
+	}
+	if err := tempFile.Close(); err != nil {
+		return common.NewErrorf("Error closing temporary dump file: %v", err)
+	}
+
+	xrayStopped := true
+	defer func() {
+		if xrayStopped {
+			if errR := s.RestartXrayService(); errR != nil {
+				logger.Warningf("Failed to restart Xray after DB restore error: %v", errR)
+			}
+		}
+	}()
+	if errStop := s.StopXrayService(); errStop != nil {
+		logger.Warningf("Failed to stop Xray before DB restore: %v", errStop)
+	}
+
+	if errClose := database.CloseDB(); errClose != nil {
+		logger.Warningf("Failed to close existing DB before restore: %v", errClose)
+	}
+
+	cmd := exec.Command(bin,
+		"--clean", "--if-exists", "--no-owner", "--no-privileges",
+		"--single-transaction", "--dbname", dbname, tempPath,
+	)
+	cmd.Env = env
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	runErr := cmd.Run()
+
+	if errInit := database.InitDB(config.GetDBPath()); errInit != nil {
+		return common.NewErrorf("Restore finished but reopening the database failed: %v", errInit)
+	}
+	s.inboundService.MigrateDB()
+
+	if runErr != nil {
+		return common.NewErrorf("pg_restore failed (database left unchanged): %v: %s", runErr, strings.TrimSpace(stderr.String()))
+	}
+
+	xrayStopped = false
+	if err := s.RestartXrayService(); err != nil {
+		return common.NewErrorf("Restored DB but failed to start Xray: %v", err)
+	}
 	return nil
 }
 

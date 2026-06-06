@@ -22,5 +22,7 @@ export const ExternalProxyEntrySchema = z.object({
     UtlsFingerprintSchema.optional(),
   ),
   alpn: z.array(AlpnSchema).optional(),
+  pinnedPeerCertSha256: z.array(z.string()).optional(),
+  echConfigList: z.string().optional(),
 });
 export type ExternalProxyEntry = z.infer<typeof ExternalProxyEntrySchema>;

@@ -2,6 +2,11 @@ package service
 
 import (
 	"context"
+	"crypto/sha256"
+	"crypto/subtle"
+	"crypto/tls"
+	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -25,6 +30,7 @@ type HeartbeatPatch struct {
 	LatencyMs     int
 	XrayVersion   string
 	PanelVersion  string
+	Guid          string
 	CpuPct        float64
 	MemPct        float64
 	UptimeSecs    uint64
@@ -40,6 +46,113 @@ var nodeHTTPClient = &http.Client{
 		IdleConnTimeout:     60 * time.Second,
 		DialContext:         netsafe.SSRFGuardedDialContext,
 	},
+}
+
+// nodeHTTPClientFor returns the HTTP client used to reach a node, honoring its
+// per-node TLS verification mode. "verify" (or any http node) uses the shared
+// client with default certificate validation. "skip" disables validation.
+// "pin" disables the default chain check but verifies the leaf certificate's
+// SHA-256 against the stored pin, keeping MITM protection for self-signed certs.
+func nodeHTTPClientFor(n *model.Node) (*http.Client, error) {
+	mode := n.TlsVerifyMode
+	if mode == "" {
+		mode = "verify"
+	}
+	if mode == "verify" || n.Scheme == "http" {
+		return nodeHTTPClient, nil
+	}
+	tlsCfg := &tls.Config{InsecureSkipVerify: true}
+	if mode == "pin" {
+		want, err := decodeCertPin(n.PinnedCertSha256)
+		if err != nil {
+			return nil, err
+		}
+		tlsCfg.VerifyConnection = func(cs tls.ConnectionState) error {
+			if len(cs.PeerCertificates) == 0 {
+				return common.NewError("node presented no certificate")
+			}
+			sum := sha256.Sum256(cs.PeerCertificates[0].Raw)
+			if subtle.ConstantTimeCompare(sum[:], want) != 1 {
+				return common.NewError("node certificate does not match pinned SHA-256")
+			}
+			return nil
+		}
+	}
+	return &http.Client{
+		Transport: &http.Transport{
+			MaxIdleConns:        64,
+			MaxIdleConnsPerHost: 4,
+			IdleConnTimeout:     60 * time.Second,
+			DialContext:         netsafe.SSRFGuardedDialContext,
+			TLSClientConfig:     tlsCfg,
+		},
+	}, nil
+}
+
+// decodeCertPin accepts a SHA-256 certificate hash as base64 (the format used
+// by Xray's pinnedPeerCertSha256) or hex with optional colons (the openssl
+// -fingerprint style) and returns the 32 raw bytes.
+func decodeCertPin(s string) ([]byte, error) {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return nil, common.NewError("certificate pin is empty")
+	}
+	if b, err := hex.DecodeString(strings.ReplaceAll(s, ":", "")); err == nil && len(b) == sha256.Size {
+		return b, nil
+	}
+	for _, enc := range []*base64.Encoding{base64.StdEncoding, base64.RawStdEncoding, base64.URLEncoding, base64.RawURLEncoding} {
+		if b, err := enc.DecodeString(s); err == nil && len(b) == sha256.Size {
+			return b, nil
+		}
+	}
+	return nil, common.NewError("certificate pin must be a SHA-256 hash (base64 or hex)")
+}
+
+// FetchCertFingerprint connects to the node over HTTPS without verifying the
+// certificate and returns the leaf certificate's SHA-256 as base64, so the UI
+// can offer a "fetch and pin current certificate" action.
+func (s *NodeService) FetchCertFingerprint(ctx context.Context, n *model.Node) (string, error) {
+	addr, err := netsafe.NormalizeHost(n.Address)
+	if err != nil {
+		return "", err
+	}
+	scheme := n.Scheme
+	if scheme != "http" && scheme != "https" {
+		scheme = "https"
+	}
+	if scheme != "https" {
+		return "", common.NewError("certificate pinning is only available for https nodes")
+	}
+	if n.Port <= 0 || n.Port > 65535 {
+		return "", common.NewError("node port must be 1-65535")
+	}
+	probeURL := &url.URL{
+		Scheme: scheme,
+		Host:   net.JoinHostPort(addr, strconv.Itoa(n.Port)),
+		Path:   normalizeBasePath(n.BasePath) + "panel/api/server/status",
+	}
+	req, err := http.NewRequestWithContext(
+		netsafe.ContextWithAllowPrivate(ctx, n.AllowPrivateAddress),
+		http.MethodGet, probeURL.String(), nil)
+	if err != nil {
+		return "", err
+	}
+	client := &http.Client{
+		Transport: &http.Transport{
+			DialContext:     netsafe.SSRFGuardedDialContext,
+			TLSClientConfig: &tls.Config{InsecureSkipVerify: true}, // lgtm[go/disabled-certificate-check]
+		},
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	if resp.TLS == nil || len(resp.TLS.PeerCertificates) == 0 {
+		return "", common.NewError("node did not present a TLS certificate")
+	}
+	sum := sha256.Sum256(resp.TLS.PeerCertificates[0].Raw)
+	return base64.StdEncoding.EncodeToString(sum[:]), nil
 }
 
 func (s *NodeService) GetAll() ([]*model.Node, error) {
@@ -112,12 +225,7 @@ func (s *NodeService) GetAll() ([]*model.Node, error) {
 		Select("inbound_id, email, enable, total, up, down, expiry_time").
 		Where("inbound_id IN ?", inboundIDs).
 		Scan(&trafficRows).Error; err == nil {
-		online := make(map[string]struct{})
-		for _, email := range s.onlineEmails() {
-			online[email] = struct{}{}
-		}
 		depletedByNode := make(map[int]int)
-		onlineByNode := make(map[int]int)
 		for _, row := range trafficRows {
 			nodeID, ok := nodeByInbound[row.InboundID]
 			if !ok {
@@ -128,23 +236,43 @@ func (s *NodeService) GetAll() ([]*model.Node, error) {
 			if expired || exhausted || !row.Enable {
 				depletedByNode[nodeID]++
 			}
-			if _, ok := online[row.Email]; ok {
-				onlineByNode[nodeID]++
-			}
 		}
+		onlineByGuid := s.onlineEmailsByGuid()
 		for _, n := range nodes {
 			n.InboundCount = len(inboundsByNode[n.Id])
 			n.DepletedCount = depletedByNode[n.Id]
-			n.OnlineCount = onlineByNode[n.Id]
+			// Online is attributed to the node that physically hosts the client
+			// (by GUID): a client on a sub-node counts under the sub-node, not
+			// the intermediate node it syncs through (#4983).
+			n.OnlineCount = len(onlineByGuid[effectiveNodeGuid(n)])
 		}
 	}
 
 	return nodes, nil
 }
 
-func (s *NodeService) onlineEmails() []string {
+func (s *NodeService) onlineEmailsByGuid() map[string]map[string]struct{} {
 	svc := InboundService{}
-	return svc.GetOnlineClients()
+	byGuid := svc.GetOnlineClientsByGuid()
+	out := make(map[string]map[string]struct{}, len(byGuid))
+	for guid, emails := range byGuid {
+		set := make(map[string]struct{}, len(emails))
+		for _, email := range emails {
+			set[email] = struct{}{}
+		}
+		out[guid] = set
+	}
+	return out
+}
+
+// effectiveNodeGuid is a node's stable online-attribution key: its reported
+// panelGuid, or a master-local synthetic id when the node is an old build that
+// hasn't reported one yet (#4983).
+func effectiveNodeGuid(n *model.Node) string {
+	if n.Guid != "" {
+		return n.Guid
+	}
+	return synthNodeGuid(n.Id)
 }
 
 func (s *NodeService) GetById(id int) (*model.Node, error) {
@@ -187,6 +315,15 @@ func (s *NodeService) normalize(n *model.Node) error {
 	if n.Scheme != "http" && n.Scheme != "https" {
 		n.Scheme = "https"
 	}
+	if n.TlsVerifyMode != "skip" && n.TlsVerifyMode != "pin" {
+		n.TlsVerifyMode = "verify"
+	}
+	n.PinnedCertSha256 = strings.TrimSpace(n.PinnedCertSha256)
+	if n.TlsVerifyMode == "pin" {
+		if _, err := decodeCertPin(n.PinnedCertSha256); err != nil {
+			return common.NewError(err.Error())
+		}
+	}
 	n.BasePath = normalizeBasePath(n.BasePath)
 	return nil
 }
@@ -218,6 +355,8 @@ func (s *NodeService) Update(id int, in *model.Node) error {
 		"api_token":             in.ApiToken,
 		"enable":                in.Enable,
 		"allow_private_address": in.AllowPrivateAddress,
+		"tls_verify_mode":       in.TlsVerifyMode,
+		"pinned_cert_sha256":    in.PinnedCertSha256,
 	}
 	if err := db.Model(model.Node{}).Where("id = ?", id).Updates(updates).Error; err != nil {
 		return err
@@ -233,6 +372,9 @@ func (s *NodeService) Delete(id int) error {
 	if err := db.Where("id = ?", id).Delete(model.Node{}).Error; err != nil {
 		return err
 	}
+	if err := db.Where("node_id = ?", id).Delete(&model.NodeClientTraffic{}).Error; err != nil {
+		return err
+	}
 	if mgr := runtime.GetManager(); mgr != nil {
 		mgr.InvalidateNode(id)
 	}
@@ -244,6 +386,80 @@ func (s *NodeService) Delete(id int) error {
 func (s *NodeService) SetEnable(id int, enable bool) error {
 	db := database.GetDB()
 	return db.Model(model.Node{}).Where("id = ?", id).Update("enable", enable).Error
+}
+
+// GetWebCertFiles asks a node for its own web TLS certificate/key file paths,
+// used by "Set Cert from Panel" so a node-assigned inbound gets paths that
+// exist on the node rather than the central panel. See issue #4854.
+func (s *NodeService) GetWebCertFiles(id int) (*runtime.WebCertFiles, error) {
+	n, err := s.GetById(id)
+	if err != nil || n == nil {
+		return nil, fmt.Errorf("node not found")
+	}
+	if !n.Enable {
+		return nil, fmt.Errorf("node is disabled")
+	}
+	mgr := runtime.GetManager()
+	if mgr == nil {
+		return nil, fmt.Errorf("runtime manager unavailable")
+	}
+	remote, err := mgr.RemoteFor(n)
+	if err != nil {
+		return nil, err
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	return remote.GetWebCertFiles(ctx)
+}
+
+// NodeUpdateResult reports the outcome of triggering a panel self-update on one
+// node so the UI can show per-node success/failure for a bulk request.
+type NodeUpdateResult struct {
+	Id    int    `json:"id"`
+	Name  string `json:"name"`
+	OK    bool   `json:"ok"`
+	Error string `json:"error,omitempty"`
+}
+
+// UpdatePanels triggers the official self-updater on each given node. Only
+// enabled, online nodes are eligible — an offline node can't be reached, so it
+// is reported as skipped rather than silently dropped.
+func (s *NodeService) UpdatePanels(ids []int) ([]NodeUpdateResult, error) {
+	mgr := runtime.GetManager()
+	if mgr == nil {
+		return nil, fmt.Errorf("runtime manager unavailable")
+	}
+	results := make([]NodeUpdateResult, 0, len(ids))
+	for _, id := range ids {
+		n, err := s.GetById(id)
+		if err != nil || n == nil {
+			results = append(results, NodeUpdateResult{Id: id, OK: false, Error: "node not found"})
+			continue
+		}
+		res := NodeUpdateResult{Id: id, Name: n.Name}
+		switch {
+		case !n.Enable:
+			res.Error = "node is disabled"
+		case n.Status != "online":
+			res.Error = "node is offline"
+		default:
+			remote, remoteErr := mgr.RemoteFor(n)
+			if remoteErr != nil {
+				res.Error = remoteErr.Error()
+				break
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+			updErr := remote.UpdatePanel(ctx)
+			cancel()
+			if updErr != nil {
+				res.Error = updErr.Error()
+			} else {
+				res.OK = true
+			}
+		}
+		results = append(results, res)
+	}
+	return results, nil
 }
 
 func (s *NodeService) UpdateHeartbeat(id int, p HeartbeatPatch) error {
@@ -259,6 +475,11 @@ func (s *NodeService) UpdateHeartbeat(id int, p HeartbeatPatch) error {
 		"uptime_secs":    p.UptimeSecs,
 		"last_error":     p.LastError,
 	}
+	// Only learn the GUID; never clear a known one if an old-build node (or a
+	// failed probe) reports none, so the stable identity survives blips.
+	if p.Guid != "" {
+		updates["guid"] = p.Guid
+	}
 	if err := db.Model(model.Node{}).Where("id = ?", id).Updates(updates).Error; err != nil {
 		return err
 	}
@@ -268,6 +489,50 @@ func (s *NodeService) UpdateHeartbeat(id int, p HeartbeatPatch) error {
 		nodeMetrics.append(nodeMetricKey(id, "mem"), now, p.MemPct)
 	}
 	return nil
+}
+
+func (s *NodeService) MarkNodeDirty(id int) error {
+	if id <= 0 {
+		return nil
+	}
+	return database.GetDB().Model(model.Node{}).
+		Where("id = ?", id).
+		Updates(map[string]any{
+			"config_dirty":    true,
+			"config_dirty_at": time.Now().UnixMilli(),
+		}).Error
+}
+
+func (s *NodeService) ClearNodeDirty(id int, dirtyAt int64) error {
+	if id <= 0 {
+		return nil
+	}
+	return database.GetDB().Model(model.Node{}).
+		Where("id = ? AND config_dirty_at = ?", id, dirtyAt).
+		Update("config_dirty", false).Error
+}
+
+func (s *NodeService) NodeSyncState(id int) (enabled bool, status string, dirty bool, dirtyAt int64, err error) {
+	if id <= 0 {
+		return false, "", false, 0, errors.New("invalid node id")
+	}
+	var row model.Node
+	err = database.GetDB().Model(model.Node{}).
+		Select("enable", "status", "config_dirty", "config_dirty_at").
+		Where("id = ?", id).
+		First(&row).Error
+	if err != nil {
+		return false, "", false, 0, err
+	}
+	return row.Enable, row.Status, row.ConfigDirty, row.ConfigDirtyAt, nil
+}
+
+func (s *NodeService) IsNodePending(id int) bool {
+	enabled, status, dirty, _, err := s.NodeSyncState(id)
+	if err != nil {
+		return false
+	}
+	return !enabled || status != "online" || dirty
 }
 
 func nodeMetricKey(id int, metric string) string {
@@ -312,8 +577,14 @@ func (s *NodeService) Probe(ctx context.Context, n *model.Node) (HeartbeatPatch,
 	}
 	req.Header.Set("Accept", "application/json")
 
+	client, err := nodeHTTPClientFor(n)
+	if err != nil {
+		patch.LastError = err.Error()
+		return patch, err
+	}
+
 	start := time.Now()
-	resp, err := nodeHTTPClient.Do(req)
+	resp, err := client.Do(req)
 	if err != nil {
 		patch.LastError = err.Error()
 		return patch, err
@@ -339,6 +610,7 @@ func (s *NodeService) Probe(ctx context.Context, n *model.Node) (HeartbeatPatch,
 				Version string `json:"version"`
 			} `json:"xray"`
 			PanelVersion string `json:"panelVersion"`
+			PanelGuid    string `json:"panelGuid"`
 			Uptime       uint64 `json:"uptime"`
 		} `json:"obj"`
 	}
@@ -357,6 +629,7 @@ func (s *NodeService) Probe(ctx context.Context, n *model.Node) (HeartbeatPatch,
 	}
 	patch.XrayVersion = o.Xray.Version
 	patch.PanelVersion = o.PanelVersion
+	patch.Guid = o.PanelGuid
 	patch.UptimeSecs = o.Uptime
 	return patch, nil
 }
@@ -380,7 +653,7 @@ func (p HeartbeatPatch) ToUI(ok bool) ProbeResultUI {
 		CpuPct:       p.CpuPct,
 		MemPct:       p.MemPct,
 		UptimeSecs:   p.UptimeSecs,
-		Error:        p.LastError,
+		Error:        FriendlyProbeError(p.LastError),
 	}
 	if ok {
 		r.Status = "online"
@@ -388,4 +661,11 @@ func (p HeartbeatPatch) ToUI(ok bool) ProbeResultUI {
 		r.Status = "offline"
 	}
 	return r
+}
+
+func FriendlyProbeError(msg string) string {
+	if strings.Contains(msg, "server gave HTTP response to HTTPS client") {
+		return "the server speaks HTTP, not HTTPS; set the node scheme to http"
+	}
+	return msg
 }
