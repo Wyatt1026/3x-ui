@@ -1,10 +1,11 @@
 import { useCallback, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Button, Modal, Space, Table, Tabs } from 'antd';
-import { ControlOutlined, PlusOutlined, UnorderedListOutlined } from '@ant-design/icons';
+import { AimOutlined, ControlOutlined, PlusOutlined, UnorderedListOutlined } from '@ant-design/icons';
 
 import { catTabLabel } from '@/pages/settings/catTabLabel';
 import RoutingBasic from './RoutingBasic';
+import RouteTester from './RouteTester';
 import RuleFormModal from './RuleFormModal';
 import type { RoutingRule } from './RuleFormModal';
 import RuleCardList from './RuleCardList';
@@ -20,6 +21,7 @@ interface RoutingTabProps {
   setTemplateSettings: SetTemplate;
   inboundTags: string[];
   clientReverseTags: string[];
+  subscriptionOutboundTags?: string[];
   isMobile: boolean;
 }
 
@@ -28,6 +30,7 @@ export default function RoutingTab({
   setTemplateSettings,
   inboundTags,
   clientReverseTags,
+  subscriptionOutboundTags,
   isMobile,
 }: RoutingTabProps) {
   const { t } = useTranslation();
@@ -116,8 +119,11 @@ export default function RoutingTab({
     for (const tag of clientReverseTags || []) {
       if (tag) out.add(tag);
     }
+    for (const tag of subscriptionOutboundTags || []) {
+      if (tag) out.add(tag);
+    }
     return [...out];
-  }, [templateSettings?.outbounds, clientReverseTags]);
+  }, [templateSettings?.outbounds, clientReverseTags, subscriptionOutboundTags]);
 
   const balancerTagOptions = useMemo(() => {
     const out: string[] = [''];
@@ -306,6 +312,11 @@ export default function RoutingTab({
                 )}
               </Space>
             ),
+          },
+          {
+            key: 'tester',
+            label: catTabLabel(<AimOutlined />, t('pages.xray.routeTester'), isMobile),
+            children: <RouteTester inboundTags={inboundTagOptions} isMobile={isMobile} />,
           },
         ]}
       />

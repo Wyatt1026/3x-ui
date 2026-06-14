@@ -9,6 +9,7 @@ import {
   normalizeXhttpForWire,
   validateRealityTarget,
 } from '@/lib/xray/stream-wire-normalize';
+import { InboundFormSchema } from '@/schemas/forms/inbound-form';
 import type { InboundFormValues } from '@/schemas/forms/inbound-form';
 
 describe('validateRealityTarget', () => {
@@ -63,6 +64,69 @@ describe('normalizeXhttpForWire stream-one', () => {
 
     expect(out.xmux).toEqual({ maxConcurrency: '16-32' });
     expect(out).not.toHaveProperty('scMaxEachPostBytes');
+  });
+
+  it('keeps inbound xmux when enableXmux is on (for the share-link extra)', () => {
+    const out = normalizeXhttpForWire({
+      path: '/app',
+      mode: 'auto',
+      enableXmux: true,
+      xmux: { maxConcurrency: '16-32' },
+    }, 'inbound');
+
+    expect(out).not.toHaveProperty('enableXmux');
+    expect(out.xmux).toEqual({ maxConcurrency: '16-32' });
+  });
+
+  it('drops inbound xmux when enableXmux is off', () => {
+    const out = normalizeXhttpForWire({
+      path: '/app',
+      mode: 'auto',
+      enableXmux: false,
+      xmux: { maxConcurrency: '16-32' },
+    }, 'inbound');
+
+    expect(out).not.toHaveProperty('enableXmux');
+    expect(out).not.toHaveProperty('xmux');
+  });
+
+  // xray-core rejects a config with both maxConnections and maxConcurrency.
+  it('drops maxConcurrency when maxConnections is set (xray-core exclusivity)', () => {
+    const out = normalizeXhttpForWire({
+      path: '/app',
+      mode: 'auto',
+      enableXmux: true,
+      xmux: { maxConcurrency: '16-32', maxConnections: 4, hKeepAlivePeriod: 30 },
+    }, 'inbound');
+
+    const xmux = out.xmux as Record<string, unknown>;
+    expect(xmux).not.toHaveProperty('maxConcurrency');
+    expect(xmux.maxConnections).toBe(4);
+    expect(xmux.hKeepAlivePeriod).toBe(30);
+  });
+
+  it('keeps maxConcurrency when maxConnections is 0/unset', () => {
+    const out = normalizeXhttpForWire({
+      path: '/app',
+      mode: 'stream-one',
+      xmux: { maxConcurrency: '16-32', maxConnections: 0 },
+    }, 'outbound');
+
+    const xmux = out.xmux as Record<string, unknown>;
+    expect(xmux.maxConcurrency).toBe('16-32');
+    expect(xmux.maxConnections).toBe(0);
+  });
+
+  it('applies xmux exclusivity on the outbound side too', () => {
+    const out = normalizeXhttpForWire({
+      path: '/app',
+      mode: 'stream-one',
+      xmux: { maxConcurrency: '16-32', maxConnections: '8' },
+    }, 'outbound');
+
+    const xmux = out.xmux as Record<string, unknown>;
+    expect(xmux).not.toHaveProperty('maxConcurrency');
+    expect(xmux.maxConnections).toBe('8');
   });
 });
 
@@ -150,6 +214,28 @@ describe('normalizeStreamSettingsForWire reality', () => {
   });
 });
 
+describe('normalizeStreamSettingsForWire tls', () => {
+  it('drops empty uTLS fingerprints from inbound and outbound TLS shapes', () => {
+    const out = normalizeStreamSettingsForWire({
+      network: 'hysteria',
+      security: 'tls',
+      tlsSettings: {
+        fingerprint: '',
+        settings: {
+          fingerprint: '',
+          echConfigList: '',
+        },
+      },
+    }, { side: 'inbound' });
+
+    const tls = out.tlsSettings as Record<string, unknown>;
+    const settings = tls.settings as Record<string, unknown>;
+    expect(tls).not.toHaveProperty('fingerprint');
+    expect(settings).not.toHaveProperty('fingerprint');
+    expect(settings.echConfigList).toBe('');
+  });
+});
+
 describe('inbound formValuesToWirePayload integration', () => {
   it('emits lean stream-one xhttp + sockopt on save', () => {
     const values = {
@@ -208,6 +294,51 @@ describe('inbound formValuesToWirePayload integration', () => {
     expect(sockopt.tcpFastOpen).toBe(true);
     const realitySettings = reality.settings as Record<string, unknown>;
     expect(realitySettings.publicKey).toBe('pub');
+  });
+
+  it('accepts Hysteria TLS with uTLS None and omits fingerprint on save', () => {
+    const values = {
+      remark: 'hy2',
+      enable: true,
+      port: 443,
+      listen: '',
+      tag: 'hy2-443',
+      expiryTime: 0,
+      sniffing: { enabled: false },
+      up: 0,
+      down: 0,
+      total: 0,
+      trafficReset: 'never',
+      lastTrafficResetTime: 0,
+      nodeId: null,
+      protocol: 'hysteria',
+      settings: { version: 2, clients: [] },
+      streamSettings: {
+        network: 'hysteria',
+        security: 'tls',
+        hysteriaSettings: {
+          version: 2,
+          auth: 'auth',
+          udpIdleTimeout: 60,
+        },
+        tlsSettings: {
+          alpn: ['h3'],
+          settings: {
+            fingerprint: '',
+          },
+        },
+      },
+    };
+
+    const parsed = InboundFormSchema.safeParse(values);
+    expect(parsed.success).toBe(true);
+    if (!parsed.success) throw parsed.error;
+
+    const payload = formValuesToWirePayload(parsed.data);
+    const stream = JSON.parse(payload.streamSettings) as Record<string, unknown>;
+    const tls = stream.tlsSettings as Record<string, unknown>;
+    const settings = tls.settings as Record<string, unknown>;
+    expect(settings).not.toHaveProperty('fingerprint');
   });
 });
 

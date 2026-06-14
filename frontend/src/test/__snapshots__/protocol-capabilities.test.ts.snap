@@ -504,6 +504,342 @@ exports[`protocol capability predicates > mixed-basic :: xhttp/tls 1`] = `
 }
 `;
 
+exports[`protocol capability predicates > mtproto-basic :: grpc/none 1`] = `
+{
+  "canEnableReality": false,
+  "canEnableStream": false,
+  "canEnableTls": false,
+  "canEnableTlsFlow": false,
+  "canEnableVisionSeed": false,
+  "isSS2022": false,
+  "isSSMultiUser": true,
+}
+`;
+
+exports[`protocol capability predicates > mtproto-basic :: grpc/reality 1`] = `
+{
+  "canEnableReality": false,
+  "canEnableStream": false,
+  "canEnableTls": false,
+  "canEnableTlsFlow": false,
+  "canEnableVisionSeed": false,
+  "isSS2022": false,
+  "isSSMultiUser": true,
+}
+`;
+
+exports[`protocol capability predicates > mtproto-basic :: grpc/tls 1`] = `
+{
+  "canEnableReality": false,
+  "canEnableStream": false,
+  "canEnableTls": false,
+  "canEnableTlsFlow": false,
+  "canEnableVisionSeed": false,
+  "isSS2022": false,
+  "isSSMultiUser": true,
+}
+`;
+
+exports[`protocol capability predicates > mtproto-basic :: httpupgrade/none 1`] = `
+{
+  "canEnableReality": false,
+  "canEnableStream": false,
+  "canEnableTls": false,
+  "canEnableTlsFlow": false,
+  "canEnableVisionSeed": false,
+  "isSS2022": false,
+  "isSSMultiUser": true,
+}
+`;
+
+exports[`protocol capability predicates > mtproto-basic :: httpupgrade/tls 1`] = `
+{
+  "canEnableReality": false,
+  "canEnableStream": false,
+  "canEnableTls": false,
+  "canEnableTlsFlow": false,
+  "canEnableVisionSeed": false,
+  "isSS2022": false,
+  "isSSMultiUser": true,
+}
+`;
+
+exports[`protocol capability predicates > mtproto-basic :: kcp/none 1`] = `
+{
+  "canEnableReality": false,
+  "canEnableStream": false,
+  "canEnableTls": false,
+  "canEnableTlsFlow": false,
+  "canEnableVisionSeed": false,
+  "isSS2022": false,
+  "isSSMultiUser": true,
+}
+`;
+
+exports[`protocol capability predicates > mtproto-basic :: tcp/none 1`] = `
+{
+  "canEnableReality": false,
+  "canEnableStream": false,
+  "canEnableTls": false,
+  "canEnableTlsFlow": false,
+  "canEnableVisionSeed": false,
+  "isSS2022": false,
+  "isSSMultiUser": true,
+}
+`;
+
+exports[`protocol capability predicates > mtproto-basic :: tcp/reality 1`] = `
+{
+  "canEnableReality": false,
+  "canEnableStream": false,
+  "canEnableTls": false,
+  "canEnableTlsFlow": false,
+  "canEnableVisionSeed": false,
+  "isSS2022": false,
+  "isSSMultiUser": true,
+}
+`;
+
+exports[`protocol capability predicates > mtproto-basic :: tcp/tls 1`] = `
+{
+  "canEnableReality": false,
+  "canEnableStream": false,
+  "canEnableTls": false,
+  "canEnableTlsFlow": false,
+  "canEnableVisionSeed": false,
+  "isSS2022": false,
+  "isSSMultiUser": true,
+}
+`;
+
+exports[`protocol capability predicates > mtproto-basic :: ws/none 1`] = `
+{
+  "canEnableReality": false,
+  "canEnableStream": false,
+  "canEnableTls": false,
+  "canEnableTlsFlow": false,
+  "canEnableVisionSeed": false,
+  "isSS2022": false,
+  "isSSMultiUser": true,
+}
+`;
+
+exports[`protocol capability predicates > mtproto-basic :: ws/tls 1`] = `
+{
+  "canEnableReality": false,
+  "canEnableStream": false,
+  "canEnableTls": false,
+  "canEnableTlsFlow": false,
+  "canEnableVisionSeed": false,
+  "isSS2022": false,
+  "isSSMultiUser": true,
+}
+`;
+
+exports[`protocol capability predicates > mtproto-basic :: xhttp/none 1`] = `
+{
+  "canEnableReality": false,
+  "canEnableStream": false,
+  "canEnableTls": false,
+  "canEnableTlsFlow": false,
+  "canEnableVisionSeed": false,
+  "isSS2022": false,
+  "isSSMultiUser": true,
+}
+`;
+
+exports[`protocol capability predicates > mtproto-basic :: xhttp/reality 1`] = `
+{
+  "canEnableReality": false,
+  "canEnableStream": false,
+  "canEnableTls": false,
+  "canEnableTlsFlow": false,
+  "canEnableVisionSeed": false,
+  "isSS2022": false,
+  "isSSMultiUser": true,
+}
+`;
+
+exports[`protocol capability predicates > mtproto-basic :: xhttp/tls 1`] = `
+{
+  "canEnableReality": false,
+  "canEnableStream": false,
+  "canEnableTls": false,
+  "canEnableTlsFlow": false,
+  "canEnableVisionSeed": false,
+  "isSS2022": false,
+  "isSSMultiUser": true,
+}
+`;
+
+exports[`protocol capability predicates > mtproto-domain-fronting :: grpc/none 1`] = `
+{
+  "canEnableReality": false,
+  "canEnableStream": false,
+  "canEnableTls": false,
+  "canEnableTlsFlow": false,
+  "canEnableVisionSeed": false,
+  "isSS2022": false,
+  "isSSMultiUser": true,
+}
+`;
+
+exports[`protocol capability predicates > mtproto-domain-fronting :: grpc/reality 1`] = `
+{
+  "canEnableReality": false,
+  "canEnableStream": false,
+  "canEnableTls": false,
+  "canEnableTlsFlow": false,
+  "canEnableVisionSeed": false,
+  "isSS2022": false,
+  "isSSMultiUser": true,
+}
+`;
+
+exports[`protocol capability predicates > mtproto-domain-fronting :: grpc/tls 1`] = `
+{
+  "canEnableReality": false,
+  "canEnableStream": false,
+  "canEnableTls": false,
+  "canEnableTlsFlow": false,
+  "canEnableVisionSeed": false,
+  "isSS2022": false,
+  "isSSMultiUser": true,
+}
+`;
+
+exports[`protocol capability predicates > mtproto-domain-fronting :: httpupgrade/none 1`] = `
+{
+  "canEnableReality": false,
+  "canEnableStream": false,
+  "canEnableTls": false,
+  "canEnableTlsFlow": false,
+  "canEnableVisionSeed": false,
+  "isSS2022": false,
+  "isSSMultiUser": true,
+}
+`;
+
+exports[`protocol capability predicates > mtproto-domain-fronting :: httpupgrade/tls 1`] = `
+{
+  "canEnableReality": false,
+  "canEnableStream": false,
+  "canEnableTls": false,
+  "canEnableTlsFlow": false,
+  "canEnableVisionSeed": false,
+  "isSS2022": false,
+  "isSSMultiUser": true,
+}
+`;
+
+exports[`protocol capability predicates > mtproto-domain-fronting :: kcp/none 1`] = `
+{
+  "canEnableReality": false,
+  "canEnableStream": false,
+  "canEnableTls": false,
+  "canEnableTlsFlow": false,
+  "canEnableVisionSeed": false,
+  "isSS2022": false,
+  "isSSMultiUser": true,
+}
+`;
+
+exports[`protocol capability predicates > mtproto-domain-fronting :: tcp/none 1`] = `
+{
+  "canEnableReality": false,
+  "canEnableStream": false,
+  "canEnableTls": false,
+  "canEnableTlsFlow": false,
+  "canEnableVisionSeed": false,
+  "isSS2022": false,
+  "isSSMultiUser": true,
+}
+`;
+
+exports[`protocol capability predicates > mtproto-domain-fronting :: tcp/reality 1`] = `
+{
+  "canEnableReality": false,
+  "canEnableStream": false,
+  "canEnableTls": false,
+  "canEnableTlsFlow": false,
+  "canEnableVisionSeed": false,
+  "isSS2022": false,
+  "isSSMultiUser": true,
+}
+`;
+
+exports[`protocol capability predicates > mtproto-domain-fronting :: tcp/tls 1`] = `
+{
+  "canEnableReality": false,
+  "canEnableStream": false,
+  "canEnableTls": false,
+  "canEnableTlsFlow": false,
+  "canEnableVisionSeed": false,
+  "isSS2022": false,
+  "isSSMultiUser": true,
+}
+`;
+
+exports[`protocol capability predicates > mtproto-domain-fronting :: ws/none 1`] = `
+{
+  "canEnableReality": false,
+  "canEnableStream": false,
+  "canEnableTls": false,
+  "canEnableTlsFlow": false,
+  "canEnableVisionSeed": false,
+  "isSS2022": false,
+  "isSSMultiUser": true,
+}
+`;
+
+exports[`protocol capability predicates > mtproto-domain-fronting :: ws/tls 1`] = `
+{
+  "canEnableReality": false,
+  "canEnableStream": false,
+  "canEnableTls": false,
+  "canEnableTlsFlow": false,
+  "canEnableVisionSeed": false,
+  "isSS2022": false,
+  "isSSMultiUser": true,
+}
+`;
+
+exports[`protocol capability predicates > mtproto-domain-fronting :: xhttp/none 1`] = `
+{
+  "canEnableReality": false,
+  "canEnableStream": false,
+  "canEnableTls": false,
+  "canEnableTlsFlow": false,
+  "canEnableVisionSeed": false,
+  "isSS2022": false,
+  "isSSMultiUser": true,
+}
+`;
+
+exports[`protocol capability predicates > mtproto-domain-fronting :: xhttp/reality 1`] = `
+{
+  "canEnableReality": false,
+  "canEnableStream": false,
+  "canEnableTls": false,
+  "canEnableTlsFlow": false,
+  "canEnableVisionSeed": false,
+  "isSS2022": false,
+  "isSSMultiUser": true,
+}
+`;
+
+exports[`protocol capability predicates > mtproto-domain-fronting :: xhttp/tls 1`] = `
+{
+  "canEnableReality": false,
+  "canEnableStream": false,
+  "canEnableTls": false,
+  "canEnableTlsFlow": false,
+  "canEnableVisionSeed": false,
+  "isSS2022": false,
+  "isSSMultiUser": true,
+}
+`;
+
 exports[`protocol capability predicates > shadowsocks-2022 :: grpc/none 1`] = `
 {
   "canEnableReality": false,
@@ -843,7 +1179,7 @@ exports[`protocol capability predicates > trojan-basic :: xhttp/tls 1`] = `
 exports[`protocol capability predicates > tunnel-basic :: grpc/none 1`] = `
 {
   "canEnableReality": false,
-  "canEnableStream": false,
+  "canEnableStream": true,
   "canEnableTls": false,
   "canEnableTlsFlow": false,
   "canEnableVisionSeed": false,
@@ -855,7 +1191,7 @@ exports[`protocol capability predicates > tunnel-basic :: grpc/none 1`] = `
 exports[`protocol capability predicates > tunnel-basic :: grpc/reality 1`] = `
 {
   "canEnableReality": false,
-  "canEnableStream": false,
+  "canEnableStream": true,
   "canEnableTls": false,
   "canEnableTlsFlow": false,
   "canEnableVisionSeed": false,
@@ -867,7 +1203,7 @@ exports[`protocol capability predicates > tunnel-basic :: grpc/reality 1`] = `
 exports[`protocol capability predicates > tunnel-basic :: grpc/tls 1`] = `
 {
   "canEnableReality": false,
-  "canEnableStream": false,
+  "canEnableStream": true,
   "canEnableTls": false,
   "canEnableTlsFlow": false,
   "canEnableVisionSeed": false,
@@ -879,7 +1215,7 @@ exports[`protocol capability predicates > tunnel-basic :: grpc/tls 1`] = `
 exports[`protocol capability predicates > tunnel-basic :: httpupgrade/none 1`] = `
 {
   "canEnableReality": false,
-  "canEnableStream": false,
+  "canEnableStream": true,
   "canEnableTls": false,
   "canEnableTlsFlow": false,
   "canEnableVisionSeed": false,
@@ -891,7 +1227,7 @@ exports[`protocol capability predicates > tunnel-basic :: httpupgrade/none 1`] =
 exports[`protocol capability predicates > tunnel-basic :: httpupgrade/tls 1`] = `
 {
   "canEnableReality": false,
-  "canEnableStream": false,
+  "canEnableStream": true,
   "canEnableTls": false,
   "canEnableTlsFlow": false,
   "canEnableVisionSeed": false,
@@ -903,7 +1239,7 @@ exports[`protocol capability predicates > tunnel-basic :: httpupgrade/tls 1`] = 
 exports[`protocol capability predicates > tunnel-basic :: kcp/none 1`] = `
 {
   "canEnableReality": false,
-  "canEnableStream": false,
+  "canEnableStream": true,
   "canEnableTls": false,
   "canEnableTlsFlow": false,
   "canEnableVisionSeed": false,
@@ -915,7 +1251,7 @@ exports[`protocol capability predicates > tunnel-basic :: kcp/none 1`] = `
 exports[`protocol capability predicates > tunnel-basic :: tcp/none 1`] = `
 {
   "canEnableReality": false,
-  "canEnableStream": false,
+  "canEnableStream": true,
   "canEnableTls": false,
   "canEnableTlsFlow": false,
   "canEnableVisionSeed": false,
@@ -927,7 +1263,7 @@ exports[`protocol capability predicates > tunnel-basic :: tcp/none 1`] = `
 exports[`protocol capability predicates > tunnel-basic :: tcp/reality 1`] = `
 {
   "canEnableReality": false,
-  "canEnableStream": false,
+  "canEnableStream": true,
   "canEnableTls": false,
   "canEnableTlsFlow": false,
   "canEnableVisionSeed": false,
@@ -939,7 +1275,7 @@ exports[`protocol capability predicates > tunnel-basic :: tcp/reality 1`] = `
 exports[`protocol capability predicates > tunnel-basic :: tcp/tls 1`] = `
 {
   "canEnableReality": false,
-  "canEnableStream": false,
+  "canEnableStream": true,
   "canEnableTls": false,
   "canEnableTlsFlow": false,
   "canEnableVisionSeed": false,
@@ -951,7 +1287,7 @@ exports[`protocol capability predicates > tunnel-basic :: tcp/tls 1`] = `
 exports[`protocol capability predicates > tunnel-basic :: ws/none 1`] = `
 {
   "canEnableReality": false,
-  "canEnableStream": false,
+  "canEnableStream": true,
   "canEnableTls": false,
   "canEnableTlsFlow": false,
   "canEnableVisionSeed": false,
@@ -963,7 +1299,7 @@ exports[`protocol capability predicates > tunnel-basic :: ws/none 1`] = `
 exports[`protocol capability predicates > tunnel-basic :: ws/tls 1`] = `
 {
   "canEnableReality": false,
-  "canEnableStream": false,
+  "canEnableStream": true,
   "canEnableTls": false,
   "canEnableTlsFlow": false,
   "canEnableVisionSeed": false,
@@ -975,7 +1311,7 @@ exports[`protocol capability predicates > tunnel-basic :: ws/tls 1`] = `
 exports[`protocol capability predicates > tunnel-basic :: xhttp/none 1`] = `
 {
   "canEnableReality": false,
-  "canEnableStream": false,
+  "canEnableStream": true,
   "canEnableTls": false,
   "canEnableTlsFlow": false,
   "canEnableVisionSeed": false,
@@ -987,7 +1323,7 @@ exports[`protocol capability predicates > tunnel-basic :: xhttp/none 1`] = `
 exports[`protocol capability predicates > tunnel-basic :: xhttp/reality 1`] = `
 {
   "canEnableReality": false,
-  "canEnableStream": false,
+  "canEnableStream": true,
   "canEnableTls": false,
   "canEnableTlsFlow": false,
   "canEnableVisionSeed": false,
@@ -999,7 +1335,7 @@ exports[`protocol capability predicates > tunnel-basic :: xhttp/reality 1`] = `
 exports[`protocol capability predicates > tunnel-basic :: xhttp/tls 1`] = `
 {
   "canEnableReality": false,
-  "canEnableStream": false,
+  "canEnableStream": true,
   "canEnableTls": false,
   "canEnableTlsFlow": false,
   "canEnableVisionSeed": false,
@@ -1347,7 +1683,7 @@ exports[`protocol capability predicates > vmess-basic :: xhttp/tls 1`] = `
 exports[`protocol capability predicates > wireguard-basic :: grpc/none 1`] = `
 {
   "canEnableReality": false,
-  "canEnableStream": false,
+  "canEnableStream": true,
   "canEnableTls": false,
   "canEnableTlsFlow": false,
   "canEnableVisionSeed": false,
@@ -1359,7 +1695,7 @@ exports[`protocol capability predicates > wireguard-basic :: grpc/none 1`] = `
 exports[`protocol capability predicates > wireguard-basic :: grpc/reality 1`] = `
 {
   "canEnableReality": false,
-  "canEnableStream": false,
+  "canEnableStream": true,
   "canEnableTls": false,
   "canEnableTlsFlow": false,
   "canEnableVisionSeed": false,
@@ -1371,7 +1707,7 @@ exports[`protocol capability predicates > wireguard-basic :: grpc/reality 1`] = 
 exports[`protocol capability predicates > wireguard-basic :: grpc/tls 1`] = `
 {
   "canEnableReality": false,
-  "canEnableStream": false,
+  "canEnableStream": true,
   "canEnableTls": false,
   "canEnableTlsFlow": false,
   "canEnableVisionSeed": false,
@@ -1383,7 +1719,7 @@ exports[`protocol capability predicates > wireguard-basic :: grpc/tls 1`] = `
 exports[`protocol capability predicates > wireguard-basic :: httpupgrade/none 1`] = `
 {
   "canEnableReality": false,
-  "canEnableStream": false,
+  "canEnableStream": true,
   "canEnableTls": false,
   "canEnableTlsFlow": false,
   "canEnableVisionSeed": false,
@@ -1395,7 +1731,7 @@ exports[`protocol capability predicates > wireguard-basic :: httpupgrade/none 1`
 exports[`protocol capability predicates > wireguard-basic :: httpupgrade/tls 1`] = `
 {
   "canEnableReality": false,
-  "canEnableStream": false,
+  "canEnableStream": true,
   "canEnableTls": false,
   "canEnableTlsFlow": false,
   "canEnableVisionSeed": false,
@@ -1407,7 +1743,7 @@ exports[`protocol capability predicates > wireguard-basic :: httpupgrade/tls 1`]
 exports[`protocol capability predicates > wireguard-basic :: kcp/none 1`] = `
 {
   "canEnableReality": false,
-  "canEnableStream": false,
+  "canEnableStream": true,
   "canEnableTls": false,
   "canEnableTlsFlow": false,
   "canEnableVisionSeed": false,
@@ -1419,7 +1755,7 @@ exports[`protocol capability predicates > wireguard-basic :: kcp/none 1`] = `
 exports[`protocol capability predicates > wireguard-basic :: tcp/none 1`] = `
 {
   "canEnableReality": false,
-  "canEnableStream": false,
+  "canEnableStream": true,
   "canEnableTls": false,
   "canEnableTlsFlow": false,
   "canEnableVisionSeed": false,
@@ -1431,7 +1767,7 @@ exports[`protocol capability predicates > wireguard-basic :: tcp/none 1`] = `
 exports[`protocol capability predicates > wireguard-basic :: tcp/reality 1`] = `
 {
   "canEnableReality": false,
-  "canEnableStream": false,
+  "canEnableStream": true,
   "canEnableTls": false,
   "canEnableTlsFlow": false,
   "canEnableVisionSeed": false,
@@ -1443,7 +1779,7 @@ exports[`protocol capability predicates > wireguard-basic :: tcp/reality 1`] = `
 exports[`protocol capability predicates > wireguard-basic :: tcp/tls 1`] = `
 {
   "canEnableReality": false,
-  "canEnableStream": false,
+  "canEnableStream": true,
   "canEnableTls": false,
   "canEnableTlsFlow": false,
   "canEnableVisionSeed": false,
@@ -1455,7 +1791,7 @@ exports[`protocol capability predicates > wireguard-basic :: tcp/tls 1`] = `
 exports[`protocol capability predicates > wireguard-basic :: ws/none 1`] = `
 {
   "canEnableReality": false,
-  "canEnableStream": false,
+  "canEnableStream": true,
   "canEnableTls": false,
   "canEnableTlsFlow": false,
   "canEnableVisionSeed": false,
@@ -1467,7 +1803,7 @@ exports[`protocol capability predicates > wireguard-basic :: ws/none 1`] = `
 exports[`protocol capability predicates > wireguard-basic :: ws/tls 1`] = `
 {
   "canEnableReality": false,
-  "canEnableStream": false,
+  "canEnableStream": true,
   "canEnableTls": false,
   "canEnableTlsFlow": false,
   "canEnableVisionSeed": false,
@@ -1479,7 +1815,7 @@ exports[`protocol capability predicates > wireguard-basic :: ws/tls 1`] = `
 exports[`protocol capability predicates > wireguard-basic :: xhttp/none 1`] = `
 {
   "canEnableReality": false,
-  "canEnableStream": false,
+  "canEnableStream": true,
   "canEnableTls": false,
   "canEnableTlsFlow": false,
   "canEnableVisionSeed": false,
@@ -1491,7 +1827,7 @@ exports[`protocol capability predicates > wireguard-basic :: xhttp/none 1`] = `
 exports[`protocol capability predicates > wireguard-basic :: xhttp/reality 1`] = `
 {
   "canEnableReality": false,
-  "canEnableStream": false,
+  "canEnableStream": true,
   "canEnableTls": false,
   "canEnableTlsFlow": false,
   "canEnableVisionSeed": false,
@@ -1503,7 +1839,7 @@ exports[`protocol capability predicates > wireguard-basic :: xhttp/reality 1`] =
 exports[`protocol capability predicates > wireguard-basic :: xhttp/tls 1`] = `
 {
   "canEnableReality": false,
-  "canEnableStream": false,
+  "canEnableStream": true,
   "canEnableTls": false,
   "canEnableTlsFlow": false,
   "canEnableVisionSeed": false,

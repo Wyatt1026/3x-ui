@@ -1,12 +1,14 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Button, Divider, Dropdown, Empty, Modal, Radio, Space, Table, Tag } from 'antd';
-import { PlusOutlined, MoreOutlined, EditOutlined, DeleteOutlined } from '@ant-design/icons';
+import { Button, Divider, Dropdown, Empty, Modal, Radio, Select, Space, Table, Tag, Tooltip } from 'antd';
+import { PlusOutlined, MoreOutlined, EditOutlined, DeleteOutlined, SyncOutlined } from '@ant-design/icons';
 import type { ColumnsType } from 'antd/es/table';
 
 import BalancerFormModal from './BalancerFormModal';
 import type { BalancerFormValue } from './BalancerFormModal';
+import { syncObservatories } from './balancer-helpers';
 import { JsonEditor } from '@/components/form';
+import { HttpUtil } from '@/utils';
 import type { XraySettingsValue, SetTemplate } from '@/hooks/useXraySetting';
 import type {
   BalancerObject,
@@ -14,10 +16,20 @@ import type {
   BalancerStrategyType,
 } from '@/schemas/routing';
 
+// Live state of one balancer inside the running core, as reported by the
+// panel's /xray/balancerStatus endpoint (RoutingService.GetBalancerInfo).
+interface BalancerLiveStatus {
+  tag: string;
+  running: boolean;
+  override: string;
+  selected: string[];
+}
+
 interface BalancersTabProps {
   templateSettings: XraySettingsValue | null;
   setTemplateSettings: SetTemplate;
   clientReverseTags: string[];
+  subscriptionOutboundTags?: string[];
   isMobile: boolean;
 }
 
@@ -39,57 +51,11 @@ const STRATEGY_LABELS: Record<string, string> = {
   leastPing: 'Least ping',
 };
 
-const DEFAULT_OBSERVATORY = Object.freeze({
-  subjectSelector: [] as string[],
-  probeURL: 'https://www.google.com/generate_204',
-  probeInterval: '1m',
-  enableConcurrency: true,
-});
-
-const DEFAULT_BURST_OBSERVATORY = Object.freeze({
-  subjectSelector: [] as string[],
-  pingConfig: {
-    destination: 'https://www.google.com/generate_204',
-    interval: '1m',
-    connectivity: 'http://connectivitycheck.platform.hicloud.com/generate_204',
-    timeout: '5s',
-    sampling: 2,
-  },
-});
-
-function collectSelectors(list: BalancerRecord[]): string[] {
-  const out = new Set<string>();
-  list.forEach((b) => (b.selector || []).forEach((s) => s && out.add(s)));
-  return [...out];
-}
-
-function syncObservatories(t: XraySettingsValue) {
-  const balancers = (t.routing?.balancers || []) as BalancerRecord[];
-
-  const leastPings = balancers.filter((b) => b.strategy?.type === 'leastPing');
-  if (leastPings.length > 0) {
-    if (!t.observatory) t.observatory = JSON.parse(JSON.stringify(DEFAULT_OBSERVATORY));
-    (t.observatory as { subjectSelector: string[] }).subjectSelector = collectSelectors(leastPings);
-  } else {
-    delete t.observatory;
-  }
-
-  const burstFeeders = balancers.filter((b) => {
-    const type = b.strategy?.type || 'random';
-    return type === 'leastLoad' || type === 'random' || type === 'roundRobin';
-  });
-  if (burstFeeders.length > 0) {
-    if (!t.burstObservatory) t.burstObservatory = JSON.parse(JSON.stringify(DEFAULT_BURST_OBSERVATORY));
-    (t.burstObservatory as { subjectSelector: string[] }).subjectSelector = collectSelectors(burstFeeders);
-  } else {
-    delete t.burstObservatory;
-  }
-}
-
 export default function BalancersTab({
   templateSettings,
   setTemplateSettings,
   clientReverseTags,
+  subscriptionOutboundTags,
   isMobile,
 }: BalancersTabProps) {
   const { t } = useTranslation();
@@ -118,8 +84,11 @@ export default function BalancersTab({
     for (const tag of clientReverseTags || []) {
       if (tag) tags.add(tag);
     }
+    for (const tag of subscriptionOutboundTags || []) {
+      if (tag) tags.add(tag);
+    }
     return [...tags];
-  }, [templateSettings?.outbounds, clientReverseTags]);
+  }, [templateSettings?.outbounds, clientReverseTags, subscriptionOutboundTags]);
 
   const otherTags = useMemo(() => {
     if (editingIndex == null) return rows.map((b) => b.tag).filter(Boolean);
@@ -137,6 +106,38 @@ export default function BalancersTab({
     },
     [setTemplateSettings],
   );
+
+  const [liveStatus, setLiveStatus] = useState<Record<string, BalancerLiveStatus>>({});
+  const [liveLoading, setLiveLoading] = useState(false);
+  const liveTags = useMemo(
+    () => rows.map((r) => r.tag).filter(Boolean).join(','),
+    [rows],
+  );
+
+  const refreshLive = useCallback(async () => {
+    if (!liveTags) {
+      setLiveStatus({});
+      return;
+    }
+    setLiveLoading(true);
+    try {
+      const msg = await HttpUtil.post('/panel/api/xray/balancerStatus', { tags: liveTags }, { silent: true });
+      if (msg?.success && msg.obj && typeof msg.obj === 'object') {
+        setLiveStatus(msg.obj as Record<string, BalancerLiveStatus>);
+      }
+    } finally {
+      setLiveLoading(false);
+    }
+  }, [liveTags]);
+
+  useEffect(() => {
+    refreshLive();
+  }, [refreshLive]);
+
+  async function setOverride(tag: string, target: string) {
+    const msg = await HttpUtil.post('/panel/api/xray/balancerOverride', { tag, target });
+    if (msg?.success) await refreshLive();
+  }
 
   function openAdd() {
     setEditingBalancer(null);
@@ -270,6 +271,49 @@ export default function BalancersTab({
         )),
     },
     { title: 'Fallback', dataIndex: 'fallbackTag', key: 'fallbackTag', align: 'center', width: 160 },
+    {
+      title: t('pages.xray.balancerLive'),
+      key: 'live',
+      align: 'center',
+      width: 170,
+      render: (_v, record) => {
+        const live = liveStatus[record.tag];
+        if (!live?.running) {
+          return (
+            <Tooltip title={t('pages.xray.balancerNotRunning')}>
+              <Tag>—</Tag>
+            </Tooltip>
+          );
+        }
+        const picked = live.override || live.selected?.[0] || record.fallbackTag;
+        return (
+          <Tooltip title={(live.selected || []).join(', ') || undefined}>
+            <Tag color={live.override ? 'orange' : 'blue'}>{picked || '—'}</Tag>
+          </Tooltip>
+        );
+      },
+    },
+    {
+      title: t('pages.xray.balancerOverride'),
+      key: 'overrideTarget',
+      align: 'center',
+      width: 200,
+      render: (_v, record) => {
+        const live = liveStatus[record.tag];
+        return (
+          <Select
+            size="small"
+            style={{ width: 170 }}
+            placeholder={t('pages.xray.balancerOverridePh')}
+            allowClear
+            disabled={!live?.running}
+            value={live?.override || undefined}
+            options={outboundTags.map((tag) => ({ label: tag, value: tag }))}
+            onChange={(v) => setOverride(record.tag, (v as string | undefined) || '')}
+          />
+        );
+      },
+    },
   ];
 
   const hasObservatory = !!templateSettings?.observatory;
@@ -316,9 +360,14 @@ export default function BalancersTab({
           </Empty>
         ) : (
           <>
-            <Button type="primary" icon={<PlusOutlined />} onClick={openAdd}>
-              {t('pages.xray.Balancers')}
-            </Button>
+            <Space>
+              <Button type="primary" icon={<PlusOutlined />} onClick={openAdd}>
+                {t('pages.xray.Balancers')}
+              </Button>
+              <Tooltip title={t('pages.xray.balancerLiveRefresh')}>
+                <Button icon={<SyncOutlined spin={liveLoading} />} onClick={refreshLive} />
+              </Tooltip>
+            </Space>
 
             <Table
               columns={columns}
@@ -326,7 +375,7 @@ export default function BalancersTab({
               rowKey={(r) => r.key}
               pagination={false}
               size="small"
-              scroll={{ x: 400 }}
+              scroll={{ x: 700 }}
             />
 
             {showObsEditor && (

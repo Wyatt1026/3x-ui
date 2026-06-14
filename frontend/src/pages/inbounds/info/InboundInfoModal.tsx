@@ -625,6 +625,76 @@ export default function InboundInfoModal({
         </dl>
       )}
 
+      {inbound.protocol === Protocols.MTPROTO && inbound.settings && (
+        <dl className="info-list info-list-block">
+          <div className="info-row">
+            <dt>{t('pages.inbounds.form.fakeTlsDomain')}</dt>
+            <dd><Tag color="green" className="value-tag">{inbound.settings.fakeTlsDomain as string}</Tag></dd>
+          </div>
+          <div className="info-row">
+            <dt>{t('pages.inbounds.form.mtprotoSecret')}</dt>
+            <dd className="value-block">
+              <code className="value-code">{inbound.settings.secret as string}</code>
+              <Tooltip title={t('copy')}>
+                <Button size="small" className="value-copy" icon={<CopyOutlined />} onClick={() => copyText(inbound.settings.secret as string, t)} />
+              </Tooltip>
+            </dd>
+          </div>
+          {(() => {
+            const s = inbound.settings;
+            const df = s.domainFronting as { ip?: string; port?: number; proxyProtocol?: boolean } | undefined;
+            const frontingTarget = df && (df.ip || df.port)
+              ? `${df.ip ?? ''}${df.port ? `:${df.port}` : ''}`
+              : '';
+            return (
+              <>
+                {frontingTarget && (
+                  <div className="info-row">
+                    <dt>{t('pages.inbounds.form.mtgDomainFrontingIp')}</dt>
+                    <dd><Tag color="blue" className="value-tag">{frontingTarget}</Tag></dd>
+                  </div>
+                )}
+                {df?.proxyProtocol && (
+                  <div className="info-row">
+                    <dt>{t('pages.inbounds.form.mtgDomainFrontingProxyProtocol')}</dt>
+                    <dd><Tag color="green" className="value-tag">{t('enabled')}</Tag></dd>
+                  </div>
+                )}
+                {Boolean(s.proxyProtocolListener) && (
+                  <div className="info-row">
+                    <dt>{t('pages.inbounds.form.mtgProxyProtocolListener')}</dt>
+                    <dd><Tag color="green" className="value-tag">{t('enabled')}</Tag></dd>
+                  </div>
+                )}
+                {Boolean(s.preferIp) && (
+                  <div className="info-row">
+                    <dt>{t('pages.inbounds.form.mtgPreferIp')}</dt>
+                    <dd><Tag color="blue" className="value-tag">{s.preferIp as string}</Tag></dd>
+                  </div>
+                )}
+                {Boolean(s.debug) && (
+                  <div className="info-row">
+                    <dt>{t('pages.inbounds.form.mtgDebug')}</dt>
+                    <dd><Tag color="green" className="value-tag">{t('enabled')}</Tag></dd>
+                  </div>
+                )}
+              </>
+            );
+          })()}
+          {links.length > 0 && (
+            <div className="info-row">
+              <dt>{t('pages.inbounds.copyLink')}</dt>
+              <dd className="value-block">
+                <code className="value-code">{links[0].link}</code>
+                <Tooltip title={t('copy')}>
+                  <Button size="small" className="value-copy" icon={<CopyOutlined />} onClick={() => copyText(links[0].link, t)} />
+                </Tooltip>
+              </dd>
+            </div>
+          )}
+        </dl>
+      )}
+
       {dbInbound.isMixed && inbound.settings && (
         <dl className="info-list info-list-block">
           <div className="info-row">

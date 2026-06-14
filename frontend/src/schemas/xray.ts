@@ -40,6 +40,11 @@ export const XrayConfigPayloadSchema = z.object({
   inboundTags: z.array(z.string()).optional(),
   clientReverseTags: z.array(z.string()).optional(),
   outboundTestUrl: z.string().optional(),
+  // Subscription outbounds are injected at runtime (not persisted in xraySetting).
+  // They are provided here so the UI can display them and use their tags in
+  // balancers / routing rules.
+  subscriptionOutbounds: z.array(z.unknown()).optional(),
+  subscriptionOutboundTags: z.array(z.string()).optional(),
 }).loose();
 
 export const OutboundTrafficRowSchema = z.object({
@@ -51,10 +56,18 @@ export const OutboundTrafficRowSchema = z.object({
 export const OutboundTrafficListSchema = z.array(OutboundTrafficRowSchema);
 
 export const OutboundTestResultSchema = z.object({
+  tag: z.string().optional(),
   success: z.boolean(),
   delay: z.number().optional(),
   error: z.string().optional(),
   mode: z.string().optional(),
+  // HTTP-mode extras: status answered by the test URL plus the httptrace
+  // timing breakdown (dial to local inbound / target TLS via the outbound /
+  // time to first byte).
+  httpStatus: z.number().optional(),
+  connectMs: z.number().optional(),
+  tlsMs: z.number().optional(),
+  ttfbMs: z.number().optional(),
   endpoints: z
     .array(
       z.object({
@@ -67,25 +80,8 @@ export const OutboundTestResultSchema = z.object({
     .optional(),
 }).loose();
 
-export const CustomGeoFormSchema = z.object({
-  type: z.enum(['geosite', 'geoip']),
-  alias: z.string().regex(/^[a-z0-9_-]+$/, 'pages.index.customGeoValidationAlias'),
-  url: z
-    .string()
-    .trim()
-    .refine(
-      (u) => {
-        if (!/^https?:\/\//i.test(u)) return false;
-        try {
-          const parsed = new URL(u);
-          return parsed.protocol === 'http:' || parsed.protocol === 'https:';
-        } catch {
-          return false;
-        }
-      },
-      { message: 'pages.index.customGeoValidationUrl' },
-    ),
-});
+// Batch results from /xray/testOutbounds, aligned with the request order.
+export const OutboundTestResultListSchema = z.array(OutboundTestResultSchema);
 
 export const RuleFormSchema = z.object({
   domain: z.string(),
@@ -118,7 +114,6 @@ export const OutboundTagSchema = z
 
 export type BalancerFormValues = z.infer<typeof BalancerFormSchema>;
 export type RuleFormValues = z.infer<typeof RuleFormSchema>;
-export type CustomGeoFormValues = z.infer<typeof CustomGeoFormSchema>;
 export type XraySettingsValue = z.infer<typeof XraySettingsValueSchema>;
 export type XrayConfigPayload = z.infer<typeof XrayConfigPayloadSchema>;
 export type OutboundTrafficRow = z.infer<typeof OutboundTrafficRowSchema>;

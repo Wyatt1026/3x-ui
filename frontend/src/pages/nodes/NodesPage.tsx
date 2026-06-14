@@ -30,7 +30,7 @@ export default function NodesPage() {
   useEffect(() => { setMessageInstance(messageApi); }, [messageApi]);
 
   const { nodes, loading, fetched, fetchError, refetch, totals } = useNodesQuery();
-  const { create, update, remove, setEnable, testConnection, fetchFingerprint, probe, updatePanels } = useNodeMutations();
+  const { create, update, remove, setEnable, testConnection, fetchFingerprint, fetchInbounds, probe, updatePanels } = useNodeMutations();
 
   const { data: latestVersion = '' } = useQuery({
     queryKey: ['server', 'panelUpdateInfo'],
@@ -83,12 +83,15 @@ export default function NodesPage() {
     const msg = await probe(node.id);
     if (msg?.success && msg.obj) {
       if (msg.obj.status === 'online') {
+        // Even if xray is in error/stop on the node we still reached its panel API.
         messageApi.success(t('pages.nodes.connectionOk', { ms: msg.obj.latencyMs }));
       } else {
         messageApi.error(msg.obj.error || t('pages.nodes.toasts.probeFailed'));
       }
     }
-  }, [probe, t, messageApi]);
+    // Refresh the list so the new xrayState / xrayError (if any) appears immediately in the row.
+    refetch();
+  }, [probe, t, messageApi, refetch]);
 
   const onToggleEnable = useCallback(async (node: NodeRecord, next: boolean) => {
     await setEnable(node.id, next);
@@ -232,6 +235,7 @@ export default function NodesPage() {
           node={formNode}
           testConnection={testConnection}
           fetchFingerprint={fetchFingerprint}
+          fetchInbounds={fetchInbounds}
           save={onSave}
           onOpenChange={setFormOpen}
         />
