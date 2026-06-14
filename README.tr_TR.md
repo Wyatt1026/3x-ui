@@ -70,7 +70,7 @@ Orijinal X-UI projesinin geliştirilmiş bir çatallaması (fork) olarak inşa e
 ## Hızlı Başlangıç
 
 ```bash
-bash <(curl -Ls https://raw.githubusercontent.com/mhsanaei/3x-ui/master/install.sh)
+bash <(curl -Ls https://raw.githubusercontent.com/Wyatt1026/3x-ui/main/install.sh)
 ```
 
 Kurulum sırasında rastgele bir kullanıcı adı, şifre ve erişim yolu oluşturulur. Kurulumdan sonra, hizmeti başlatabileceğiniz/durdurabileceğiniz, giriş bilgilerinizi görüntüleyebileceğiniz veya sıfırlayabileceğiniz, SSL sertifikalarını yönetebileceğiniz ve çok daha fazlasını yapabileceğiniz yönetim menüsünü açmak için terminalde `x-ui` komutunu çalıştırın.

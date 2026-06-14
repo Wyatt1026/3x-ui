@@ -70,7 +70,7 @@ Construido como un fork mejorado del proyecto X-UI original, 3X-UI añade un sop
 ## Inicio Rápido
 
 ```bash
-bash <(curl -Ls https://raw.githubusercontent.com/mhsanaei/3x-ui/master/install.sh)
+bash <(curl -Ls https://raw.githubusercontent.com/Wyatt1026/3x-ui/main/install.sh)
 ```
 
 Durante la instalación se generan un nombre de usuario, una contraseña y una ruta de acceso aleatorios. Tras la instalación, ejecuta `x-ui` para abrir el menú de gestión, donde puedes iniciar/detener el servicio, ver o restablecer tus credenciales de acceso, gestionar certificados SSL y mucho más.
