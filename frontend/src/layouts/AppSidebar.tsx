@@ -12,10 +12,13 @@ import {
   CodeOutlined,
   DashboardOutlined,
   DatabaseOutlined,
+  ExportOutlined,
   GithubOutlined,
+  GlobalOutlined,
   HeartOutlined,
   ImportOutlined,
   LogoutOutlined,
+  MailOutlined,
   MenuOutlined,
   MessageOutlined,
   MoonFilled,
@@ -27,7 +30,6 @@ import {
   TagsOutlined,
   TeamOutlined,
   ToolOutlined,
-  UploadOutlined,
 } from '@ant-design/icons';
 
 import { HttpUtil } from '@/utils';
@@ -40,7 +42,7 @@ const DONATE_URL = 'https://donate.sanaei.dev/';
 const REPO_URL = 'https://github.com/MHSanaei/3x-ui';
 const LOGOUT_KEY = '__logout__';
 
-type IconName = 'dashboard' | 'inbound' | 'team' | 'groups' | 'setting' | 'tool' | 'cluster' | 'logout' | 'apidocs' | 'outbound';
+type IconName = 'dashboard' | 'inbound' | 'team' | 'groups' | 'setting' | 'tool' | 'cluster' | 'hosts' | 'logout' | 'apidocs' | 'outbound';
 
 const iconByName: Record<IconName, ComponentType> = {
   dashboard: DashboardOutlined,
@@ -50,9 +52,10 @@ const iconByName: Record<IconName, ComponentType> = {
   setting: SettingOutlined,
   tool: ToolOutlined,
   cluster: ClusterOutlined,
+  hosts: GlobalOutlined,
   logout: LogoutOutlined,
   apidocs: ApiOutlined,
-  outbound: UploadOutlined,
+  outbound: ExportOutlined,
 };
 
 function readCollapsed(): boolean {
@@ -138,6 +141,7 @@ export default function AppSidebar() {
     { key: '/clients', icon: 'team', title: t('menu.clients') },
     { key: '/groups', icon: 'groups', title: t('menu.groups') },
     { key: '/nodes', icon: 'cluster', title: t('menu.nodes') },
+    { key: '/hosts', icon: 'hosts', title: t('menu.hosts') },
     { key: '/xray#outbound', icon: 'outbound', title: t('pages.xray.Outbounds') },
     { key: '/settings', icon: 'setting', title: t('menu.settings') },
     { key: '/xray', icon: 'tool', title: t('menu.xray') },
@@ -153,6 +157,7 @@ export default function AppSidebar() {
       { key: '/settings#general', icon: <SettingOutlined />, label: t('pages.settings.panelSettings') },
       { key: '/settings#security', icon: <SafetyOutlined />, label: t('pages.settings.securitySettings') },
       { key: '/settings#telegram', icon: <MessageOutlined />, label: t('pages.settings.TGBotSettings') },
+      { key: '/settings#email', icon: <MailOutlined />, label: t('pages.settings.emailSettings') },
       { key: '/settings#subscription', icon: <CloudServerOutlined />, label: t('pages.settings.subSettings') },
     ];
     if (showSubFormats) {

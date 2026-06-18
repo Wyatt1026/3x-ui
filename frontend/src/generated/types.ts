@@ -3,6 +3,7 @@ export type OnlineAPISupport = number;
 export type ProcessState = string;
 export type Protocol = string;
 export type SubLinkProvider = unknown;
+export type staticEgressResolver = string;
 export type transportBits = number;
 
 export interface AllSetting {
@@ -32,9 +33,18 @@ export interface AllSetting {
   ldapVlessField: string;
   pageSize: number;
   panelOutbound: string;
-  remarkModel: string;
+  remarkTemplate: string;
   restartXrayOnClientDisable: boolean;
   sessionMaxAge: number;
+  smtpCpu: number;
+  smtpEnable: boolean;
+  smtpEnabledEvents: string;
+  smtpEncryptionType: string;
+  smtpHost: string;
+  smtpPassword: string;
+  smtpPort: number;
+  smtpTo: string;
+  smtpUsername: string;
   subAnnounce: string;
   subCertFile: string;
   subClashEnable: boolean;
@@ -43,7 +53,6 @@ export interface AllSetting {
   subClashRules: string;
   subClashURI: string;
   subDomain: string;
-  subEmailInRemark: boolean;
   subEnable: boolean;
   subEnableRouting: boolean;
   subEncrypt: boolean;
@@ -59,7 +68,6 @@ export interface AllSetting {
   subPort: number;
   subProfileUrl: string;
   subRoutingRules: string;
-  subShowInfo: boolean;
   subSupportUrl: string;
   subThemeDir: string;
   subTitle: string;
@@ -69,10 +77,10 @@ export interface AllSetting {
   tgBotBackup: boolean;
   tgBotChatId: string;
   tgBotEnable: boolean;
-  tgBotLoginNotify: boolean;
   tgBotProxy: string;
   tgBotToken: string;
   tgCpu: number;
+  tgEnabledEvents: string;
   tgLang: string;
   tgRunTime: string;
   timeLocation: string;
@@ -97,6 +105,7 @@ export interface AllSettingView {
   hasApiToken: boolean;
   hasLdapPassword: boolean;
   hasNordSecret: boolean;
+  hasSmtpPassword: boolean;
   hasTgBotToken: boolean;
   hasTwoFactorToken: boolean;
   hasWarpSecret: boolean;
@@ -122,9 +131,18 @@ export interface AllSettingView {
   ldapVlessField: string;
   pageSize: number;
   panelOutbound: string;
-  remarkModel: string;
+  remarkTemplate: string;
   restartXrayOnClientDisable: boolean;
   sessionMaxAge: number;
+  smtpCpu: number;
+  smtpEnable: boolean;
+  smtpEnabledEvents: string;
+  smtpEncryptionType: string;
+  smtpHost: string;
+  smtpPassword: string;
+  smtpPort: number;
+  smtpTo: string;
+  smtpUsername: string;
   subAnnounce: string;
   subCertFile: string;
   subClashEnable: boolean;
@@ -133,7 +151,6 @@ export interface AllSettingView {
   subClashRules: string;
   subClashURI: string;
   subDomain: string;
-  subEmailInRemark: boolean;
   subEnable: boolean;
   subEnableRouting: boolean;
   subEncrypt: boolean;
@@ -149,7 +166,6 @@ export interface AllSettingView {
   subPort: number;
   subProfileUrl: string;
   subRoutingRules: string;
-  subShowInfo: boolean;
   subSupportUrl: string;
   subThemeDir: string;
   subTitle: string;
@@ -159,10 +175,10 @@ export interface AllSettingView {
   tgBotBackup: boolean;
   tgBotChatId: string;
   tgBotEnable: boolean;
-  tgBotLoginNotify: boolean;
   tgBotProxy: string;
   tgBotToken: string;
   tgCpu: number;
+  tgEnabledEvents: string;
   tgLang: string;
   tgRunTime: string;
   timeLocation: string;
@@ -274,6 +290,42 @@ export interface HistoryOfSeeders {
   seederName: string;
 }
 
+export interface Host {
+  address: string;
+  allowInsecure: boolean;
+  alpn: string[];
+  createdAt: number;
+  echConfigList: string;
+  excludeFromSubTypes: string[];
+  finalMask: string;
+  fingerprint: string;
+  hostHeader: string;
+  id: number;
+  inboundId: number;
+  isDisabled: boolean;
+  isHidden: boolean;
+  keepSniBlank: boolean;
+  mihomoIpVersion: string;
+  mihomoX25519: boolean;
+  muxParams: unknown;
+  nodeGuids?: string[];
+  overrideSniFromAddress: boolean;
+  path: string;
+  pinnedPeerCertSha256: string[];
+  port: number;
+  remark: string;
+  security: string;
+  serverDescription: string;
+  shuffleHost: boolean;
+  sni: string;
+  sockoptParams: unknown;
+  sortOrder: number;
+  tags: string[];
+  updatedAt: number;
+  verifyPeerCertByName: boolean;
+  vlessRoute: string;
+}
+
 export interface Inbound {
   clientStats: ClientTraffic[];
   down: number;
@@ -357,7 +409,10 @@ export interface Node {
   latencyMs: number;
   memPct: number;
   name: string;
+  netDown: number;
+  netUp: number;
   onlineCount: number;
+  outboundTag: string;
   panelVersion: string;
   parentGuid?: string;
   pinnedCertSha256: string;

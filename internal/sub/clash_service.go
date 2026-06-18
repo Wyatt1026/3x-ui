@@ -22,25 +22,47 @@ func NewSubClashService(enableRouting bool, clashRules string, subService *SubSe
 }
 
 func (s *SubClashService) GetClash(subId string, host string) (string, string, error) {
-	// Set per-request state so resolveInboundAddress sees the node map.
-	s.SubService.PrepareForRequest(host)
-	inbounds, err := s.SubService.getInboundsBySubId(subId)
-	if err != nil || len(inbounds) == 0 {
+	subReq := s.SubService.ForRequest(host)
+	subReq.subscriptionBody = true
+	inbounds, err := subReq.getInboundsBySubId(subId)
+	if err != nil {
 		return "", "", err
+	}
+	externalLinks, err := subReq.getClientExternalLinksBySubId(subId)
+	if err != nil {
+		return "", "", err
+	}
+	if len(inbounds) == 0 && len(externalLinks) == 0 {
+		return "", "", nil
 	}
 
 	var proxies []map[string]any
 
 	seenEmails := make(map[string]struct{})
 	for _, inbound := range inbounds {
-		clients := s.SubService.matchingClients(inbound, subId)
+		clients := subReq.matchingClients(inbound, subId)
 		if len(clients) == 0 {
 			continue
 		}
-		s.SubService.projectThroughFallbackMaster(inbound)
+		subReq.projectThroughFallbackMaster(inbound)
+		if hostEps := subReq.hostEndpoints(inbound, "clash"); len(hostEps) > 0 {
+			injectExternalProxy(inbound, hostEps)
+		}
 		for _, client := range clients {
 			seenEmails[client.Email] = struct{}{}
-			proxies = append(proxies, s.getProxies(inbound, client, host)...)
+			proxies = append(proxies, s.getProxies(subReq, inbound, client, host)...)
+		}
+	}
+	for _, ext := range externalLinks {
+		for _, el := range expandEntry(ext) {
+			name := el.Name
+			if name == "" {
+				name = ext.Email
+			}
+			if proxy := s.clashProxyFromExternal(el.Link, name); proxy != nil {
+				seenEmails[ext.Email] = struct{}{}
+				proxies = append(proxies, proxy)
+			}
 		}
 	}
 
@@ -54,7 +76,7 @@ func (s *SubClashService) GetClash(subId string, host string) (string, string, e
 	for e := range seenEmails {
 		emails = append(emails, e)
 	}
-	traffic, _ := s.SubService.AggregateTrafficByEmails(emails)
+	traffic, _ := subReq.AggregateTrafficByEmails(emails)
 
 	proxyNames := make([]string, 0, len(proxies)+1)
 	for _, proxy := range proxies {
@@ -121,12 +143,12 @@ func fallbackProxyName(proxy map[string]any, idx int) string {
 	return fmt.Sprintf("proxy-%d", idx+1)
 }
 
-func (s *SubClashService) getProxies(inbound *model.Inbound, client model.Client, host string) []map[string]any {
+func (s *SubClashService) getProxies(subReq *SubService, inbound *model.Inbound, client model.Client, host string) []map[string]any {
 	stream := s.streamData(inbound.StreamSettings)
 	// For node-managed inbounds the Clash proxy "server" must be the
 	// node's address, not the request host. resolveInboundAddress handles
 	// the node→subscriber-host fallback chain.
-	defaultDest := s.SubService.resolveInboundAddress(inbound)
+	defaultDest := subReq.resolveInboundAddress(inbound)
 	if defaultDest == "" {
 		defaultDest = host
 	}
@@ -145,6 +167,9 @@ func (s *SubClashService) getProxies(inbound *model.Inbound, client model.Client
 	proxies := make([]map[string]any, 0, len(externalProxies))
 	for _, ep := range externalProxies {
 		extPrxy := ep.(map[string]any)
+		// Expand the host's {{VAR}} remark template for this client (no-op for
+		// the synthetic/legacy entry) before it becomes the proxy name.
+		subReq.renderHostRemark(inbound, client, extPrxy)
 		workingInbound := *inbound
 		workingInbound.Listen = extPrxy["dest"].(string)
 		workingInbound.Port = int(extPrxy["port"].(float64))
@@ -167,24 +192,30 @@ func (s *SubClashService) getProxies(inbound *model.Inbound, client model.Client
 		if hasExternalProxy {
 			applyExternalProxyTLSToStream(extPrxy, workingStream, security)
 		}
+		applyHostStreamOverrides(extPrxy, workingStream)
 
-		proxy := s.buildProxy(&workingInbound, client, workingStream, extPrxy["remark"].(string))
+		proxy := s.buildProxy(subReq, &workingInbound, client, workingStream, extPrxy)
 		if len(proxy) > 0 {
+			// Host-only mihomo knob: ip-version is a top-level proxy field, set
+			// last so it cannot be clobbered. Absent for legacy externalProxy.
+			if v, _ := extPrxy["mihomoIpVersion"].(string); v != "" {
+				proxy["ip-version"] = v
+			}
 			proxies = append(proxies, proxy)
 		}
 	}
 	return proxies
 }
 
-func (s *SubClashService) buildProxy(inbound *model.Inbound, client model.Client, stream map[string]any, extraRemark string) map[string]any {
+func (s *SubClashService) buildProxy(subReq *SubService, inbound *model.Inbound, client model.Client, stream map[string]any, ep map[string]any) map[string]any {
 	// Hysteria has its own transport + TLS model, applyTransport /
 	// applySecurity don't fit.
 	if inbound.Protocol == model.Hysteria {
-		return s.buildHysteriaProxy(inbound, client, extraRemark)
+		return s.buildHysteriaProxy(subReq, inbound, client, ep)
 	}
 
 	proxy := map[string]any{
-		"name":   s.SubService.genRemark(inbound, client.Email, extraRemark),
+		"name":   subReq.endpointRemark(inbound, client.Email, ep),
 		"server": inbound.Listen,
 		"port":   inbound.Port,
 		"udp":    true,
@@ -255,7 +286,7 @@ func (s *SubClashService) buildProxy(inbound *model.Inbound, client model.Client
 // directly instead of going through streamData/tlsData, because those
 // helpers prune fields (like `allowInsecure` / the salamander obfs
 // block) that the hysteria proxy wants preserved.
-func (s *SubClashService) buildHysteriaProxy(inbound *model.Inbound, client model.Client, extraRemark string) map[string]any {
+func (s *SubClashService) buildHysteriaProxy(subReq *SubService, inbound *model.Inbound, client model.Client, ep map[string]any) map[string]any {
 	var inboundSettings map[string]any
 	_ = json.Unmarshal([]byte(inbound.Settings), &inboundSettings)
 
@@ -267,7 +298,7 @@ func (s *SubClashService) buildHysteriaProxy(inbound *model.Inbound, client mode
 	}
 
 	proxy := map[string]any{
-		"name":   s.SubService.genRemark(inbound, client.Email, extraRemark),
+		"name":   subReq.endpointRemark(inbound, client.Email, ep),
 		"type":   proxyType,
 		"server": inbound.Listen,
 		"port":   inbound.Port,
@@ -462,6 +493,11 @@ func (s *SubClashService) applySecurity(proxy map[string]any, security string, s
 				}
 				if len(out) > 0 {
 					proxy["alpn"] = out
+				}
+			}
+			if inner, ok := tlsSettings["settings"].(map[string]any); ok {
+				if insecure, ok := inner["allowInsecure"].(bool); ok && insecure {
+					proxy["skip-cert-verify"] = true
 				}
 			}
 		}

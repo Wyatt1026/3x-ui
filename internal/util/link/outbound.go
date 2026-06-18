@@ -397,11 +397,11 @@ func parseShadowsocks(link string) (*ParseResult, error) {
 }
 
 func splitMethodPass(userInfo string) (string, string) {
-	colon := strings.Index(userInfo, ":")
-	if colon < 0 {
+	before, after, ok := strings.Cut(userInfo, ":")
+	if !ok {
 		return "2022-blake3-aes-128-gcm", userInfo // guess
 	}
-	return userInfo[:colon], userInfo[colon+1:]
+	return before, after
 }
 
 // --- hysteria2 ---
@@ -781,8 +781,10 @@ func base64DecodeFlexible(s string) (string, error) {
 	return "", fmt.Errorf("base64 decode failed")
 }
 
-// SlugRemark turns a free-form remark into a conservative DNS-ish tag segment.
-var slugRe = regexp.MustCompile(`[^a-z0-9]+`)
+// SlugRemark turns a free-form remark into a tag segment, keeping Unicode
+// letters and digits (so non-ASCII remarks like Cyrillic stay readable) and
+// replacing every other run of characters with a single dash.
+var slugRe = regexp.MustCompile(`[^\p{L}\p{N}]+`)
 
 func SlugRemark(remark string) string {
 	s := strings.ToLower(strings.TrimSpace(remark))

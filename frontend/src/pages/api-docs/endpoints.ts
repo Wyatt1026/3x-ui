@@ -503,12 +503,12 @@ export const sections: readonly Section[] = [
       {
         method: 'GET',
         path: '/panel/api/clients/get/:email',
-        summary: 'Fetch one client by email, including the inbound IDs it is attached to.',
+        summary: 'Fetch one client by email, including the inbound IDs and external config IDs it is attached to.',
         params: [
           { name: 'email', in: 'path', type: 'string', desc: 'Client email (unique identifier).' },
         ],
         response:
-          '{\n  "success": true,\n  "obj": {\n    "client": { "id": 1, "email": "alice@example.com", ... },\n    "inboundIds": [3, 5]\n  }\n}',
+          '{\n  "success": true,\n  "obj": {\n    "client": { "id": 1, "email": "alice@example.com", ... },\n    "inboundIds": [3, 5],\n    "externalLinks": [{ "kind": "link", "value": "vless://...", "remark": "DE" }]\n  }\n}',
       },
       {
         method: 'POST',
@@ -561,6 +561,17 @@ export const sections: readonly Section[] = [
           { name: 'inboundIds', in: 'body (json)', type: 'integer[]', desc: 'Inbound IDs to detach.' },
         ],
         body: '{\n  "inboundIds": [5]\n}',
+        response: '{\n  "success": true\n}',
+      },
+      {
+        method: 'POST',
+        path: '/panel/api/clients/:email/externalLinks',
+        summary: 'Replace a client\'s external links (per-client share links and remote subscription URLs surfaced in their subscription). Sends the full set; the server replaces all rows.',
+        params: [
+          { name: 'email', in: 'path', type: 'string', desc: 'Client email (unique identifier).' },
+          { name: 'externalLinks', in: 'body (json)', type: 'object[]', desc: 'Rows of { kind: "link" | "subscription", value, remark }. kind=link must be a share link; kind=subscription must be an http(s) URL.' },
+        ],
+        body: '{\n  "externalLinks": [\n    { "kind": "link", "value": "vless://uuid@host:443?...#srv", "remark": "DE" },\n    { "kind": "subscription", "value": "https://provider.example/sub/abc", "remark": "Provider" }\n  ]\n}',
         response: '{\n  "success": true\n}',
       },
       {
@@ -722,6 +733,12 @@ export const sections: readonly Section[] = [
       },
       {
         method: 'POST',
+        path: '/panel/api/clients/clientIpsByGuid',
+        summary: 'Per-client source IPs grouped by the panelGuid of the node that observed them. Lets the central panel attribute and enforce per-client IP limits using the real visitor IPs each node sees, instead of the address of the intermediate panel it syncs through.',
+        response: '{\n  "success": true,\n  "obj": {\n    "a1b2-...": {\n      "user1": [\n        { "ip": "1.2.3.4", "timestamp": 1700000000 }\n      ]\n    }\n  }\n}',
+      },
+      {
+        method: 'POST',
         path: '/panel/api/clients/activeInbounds',
         summary: 'Inbound tags that carried traffic within the heartbeat window, grouped by the hosting node\'s panelGuid. Pairs with onlinesByGuid so the inbounds page only marks a multi-inbound client online on the inbounds it actually used. Nodes that do not report per-inbound activity are absent.',
         response: '{\n  "success": true,\n  "obj": {\n    "a1b2-...": ["in-443-tcp", "in-8443-tcp"]\n  }\n}',
@@ -778,6 +795,18 @@ export const sections: readonly Section[] = [
         summary: 'List every configured node with its connection details, health, and last heartbeat patch.',
         responseSchema: 'Node',
         responseSchemaArray: true,
+      },
+      {
+        method: 'POST',
+        path: '/panel/api/nodes/mtls/ca',
+        summary: "This panel's node-auth CA certificate (public, PEM) to paste into a node's mTLS trust setting. Lazily mints the CA and the master client cert on first call. Pair with setting tlsVerifyMode=mtls on the node.",
+        response: '{\n  "success": true,\n  "obj": {\n    "caCert": "-----BEGIN CERTIFICATE-----\\n...\\n-----END CERTIFICATE-----\\n"\n  }\n}',
+      },
+      {
+        method: 'POST',
+        path: '/panel/api/nodes/mtls/trustCA',
+        summary: "Set the CA certificate this panel trusts for incoming node-API client certificates (this panel acting as a node). Paste the managing panel's CA (from nodes/mtls/ca). An empty caCert disables it. A non-empty value must be a PEM certificate. Applied on the next panel restart.",
+        body: '{\n  "caCert": "-----BEGIN CERTIFICATE-----\\n...\\n-----END CERTIFICATE-----\\n"\n}',
       },
       {
         method: 'GET',
@@ -879,6 +908,99 @@ export const sections: readonly Section[] = [
   },
 
   {
+    id: 'hosts',
+    title: 'Hosts',
+    description:
+      'Per-inbound override endpoints. Each enabled host renders one extra subscription link/proxy with its own address/port/TLS, superseding the legacy externalProxy array. All endpoints under /panel/api/hosts.',
+    endpoints: [
+      {
+        method: 'GET',
+        path: '/panel/api/hosts/list',
+        summary: 'List every host across all inbounds, grouped by inbound then ordered by sort order.',
+        responseSchema: 'Host',
+        responseSchemaArray: true,
+      },
+      {
+        method: 'GET',
+        path: '/panel/api/hosts/get/:id',
+        summary: 'Fetch a single host by ID.',
+        params: [
+          { name: 'id', in: 'path', type: 'number', desc: 'Host ID.' },
+        ],
+        responseSchema: 'Host',
+      },
+      {
+        method: 'GET',
+        path: '/panel/api/hosts/byInbound/:inboundId',
+        summary: "Fetch one inbound's hosts, ordered by sort order then id.",
+        params: [
+          { name: 'inboundId', in: 'path', type: 'number', desc: 'Inbound ID.' },
+        ],
+        responseSchema: 'Host',
+        responseSchemaArray: true,
+      },
+      {
+        method: 'GET',
+        path: '/panel/api/hosts/tags',
+        summary: 'Distinct, sorted set of tags used across all hosts.',
+        response: '{\n  "success": true,\n  "obj": ["CDN", "EU", "FAST"]\n}',
+      },
+      {
+        method: 'POST',
+        path: '/panel/api/hosts/add',
+        summary: 'Create a host on an inbound. inboundId and remark are required; security defaults to "same" (inherit the inbound).',
+        body: '{\n  "inboundId": 1,\n  "remark": "cdn-front",\n  "address": "cdn.example.com",\n  "port": 8443,\n  "security": "same",\n  "sni": "",\n  "tags": ["CDN"]\n}',
+        responseSchema: 'Host',
+      },
+      {
+        method: 'POST',
+        path: '/panel/api/hosts/update/:id',
+        summary: 'Replace a host’s content. The inbound and sort order are immutable here (use /reorder for ordering).',
+        params: [
+          { name: 'id', in: 'path', type: 'number', desc: 'Host ID.' },
+        ],
+        body: '{\n  "inboundId": 1,\n  "remark": "cdn-front",\n  "address": "cdn.example.com",\n  "port": 8443,\n  "security": "same",\n  "sni": "",\n  "tags": ["CDN"]\n}',
+        responseSchema: 'Host',
+      },
+      {
+        method: 'POST',
+        path: '/panel/api/hosts/del/:id',
+        summary: 'Delete a host.',
+        params: [
+          { name: 'id', in: 'path', type: 'number', desc: 'Host ID.' },
+        ],
+      },
+      {
+        method: 'POST',
+        path: '/panel/api/hosts/setEnable/:id',
+        summary: 'Enable or disable a single host (disabled hosts are skipped in subscriptions).',
+        params: [
+          { name: 'id', in: 'path', type: 'number', desc: 'Host ID.' },
+        ],
+        body: '{\n  "enable": true\n}',
+      },
+      {
+        method: 'POST',
+        path: '/panel/api/hosts/reorder',
+        summary: 'Set host sort order by the position of each id in the array.',
+        body: '{\n  "ids": [3, 1, 2]\n}',
+      },
+      {
+        method: 'POST',
+        path: '/panel/api/hosts/bulk/setEnable',
+        summary: 'Enable or disable many hosts in one call.',
+        body: '{\n  "ids": [1, 2, 3],\n  "enable": false\n}',
+      },
+      {
+        method: 'POST',
+        path: '/panel/api/hosts/bulk/del',
+        summary: 'Delete many hosts in one call.',
+        body: '{\n  "ids": [1, 2, 3]\n}',
+      },
+    ],
+  },
+
+  {
     id: 'backup',
     title: 'Backup',
     description: 'Operations that interact with the configured Telegram bot.',
@@ -930,6 +1052,18 @@ export const sections: readonly Section[] = [
         method: 'POST',
         path: '/panel/api/setting/restartPanel',
         summary: 'Restart the entire 3x-ui process after a 3-second grace period. The connection drops immediately; the panel comes back online ~5-10 seconds later.',
+      },
+      {
+        method: 'POST',
+        path: '/panel/api/setting/testSmtp',
+        summary: 'Test SMTP connection with stage-by-stage reporting (connect, auth, send). Returns structured result with stage and message.',
+        response: '{\n  "success": true,\n  "stage": "send",\n  "msg": "Test email sent successfully"\n}',
+      },
+      {
+        method: 'POST',
+        path: '/panel/api/setting/testTgBot',
+        summary: 'Test Telegram bot connection by sending a test message to the configured chat.',
+        response: '{\n  "success": true,\n  "msg": "Test message sent to Telegram"\n}',
       },
       {
         method: 'GET',

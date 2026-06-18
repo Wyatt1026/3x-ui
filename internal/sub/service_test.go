@@ -32,8 +32,7 @@ func TestSubscriptionExpiryFromClient(t *testing.T) {
 func TestGenRemarkOmitsNodeName(t *testing.T) {
 	nodeID := 7
 	s := &SubService{
-		remarkModel: "-ieo",
-		nodesByID:   map[int]*model.Node{7: {Id: 7, Name: "Berlin", Address: "node7.example.com"}},
+		nodesByID: map[int]*model.Node{7: {Id: 7, Name: "Berlin", Address: "node7.example.com"}},
 	}
 	ib := &model.Inbound{Remark: "vless-tcp", NodeID: &nodeID}
 	if got := s.genRemark(ib, "", ""); got != "vless-tcp" {
@@ -423,6 +422,25 @@ func TestCloneStringMap_Empty(t *testing.T) {
 	}
 	if len(dst) != 0 {
 		t.Fatalf("clone of empty map should be empty, got %v", dst)
+	}
+}
+
+func TestJoinHostPort(t *testing.T) {
+	cases := []struct {
+		host string
+		port int
+		want string
+	}{
+		{"example.com", 443, "example.com:443"},
+		{"1.2.3.4", 443, "1.2.3.4:443"},
+		{"2001:db8::1", 443, "[2001:db8::1]:443"},
+		{"[2001:db8::1]", 443, "[2001:db8::1]:443"},
+		{"2001:db8::1", 8080, "[2001:db8::1]:8080"},
+	}
+	for _, c := range cases {
+		if got := joinHostPort(c.host, c.port); got != c.want {
+			t.Fatalf("joinHostPort(%q, %d) = %q, want %q", c.host, c.port, got, c.want)
+		}
 	}
 }
 

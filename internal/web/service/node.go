@@ -11,15 +11,19 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/mhsanaei/3x-ui/v3/internal/database"
 	"github.com/mhsanaei/3x-ui/v3/internal/database/model"
+	"github.com/mhsanaei/3x-ui/v3/internal/logger"
 	"github.com/mhsanaei/3x-ui/v3/internal/util/common"
+	"github.com/mhsanaei/3x-ui/v3/internal/util/json_util"
 	"github.com/mhsanaei/3x-ui/v3/internal/util/netsafe"
 	"github.com/mhsanaei/3x-ui/v3/internal/web/runtime"
+	"github.com/mhsanaei/3x-ui/v3/internal/xray"
 )
 
 type HeartbeatPatch struct {
@@ -32,7 +36,11 @@ type HeartbeatPatch struct {
 	CpuPct        float64
 	MemPct        float64
 	UptimeSecs    uint64
-	LastError     string
+	// NetUp/NetDown are the node's current interface throughput (bytes/sec),
+	// summed over non-virtual interfaces, read from its status response.
+	NetUp     uint64
+	NetDown   uint64
+	LastError string
 	// XrayState and XrayError come from the remote /panel/api/server/status when the
 	// panel API is reachable. They allow distinguishing panel connectivity from
 	// Xray core health on the node.
@@ -272,8 +280,11 @@ func (s *NodeService) normalize(n *model.Node) error {
 	if n.Scheme != "http" && n.Scheme != "https" {
 		n.Scheme = "https"
 	}
-	if n.TlsVerifyMode != "skip" && n.TlsVerifyMode != "pin" {
+	if n.TlsVerifyMode != "skip" && n.TlsVerifyMode != "pin" && n.TlsVerifyMode != "mtls" {
 		n.TlsVerifyMode = "verify"
+	}
+	if n.TlsVerifyMode == "mtls" && n.Scheme != "https" {
+		return common.NewError("mtls requires the node scheme to be https")
 	}
 	n.PinnedCertSha256 = strings.TrimSpace(n.PinnedCertSha256)
 	if n.InboundSyncMode != "selected" {
@@ -339,6 +350,7 @@ func (s *NodeService) Update(id int, in *model.Node) error {
 		"pinned_cert_sha256":    in.PinnedCertSha256,
 		"inbound_sync_mode":     in.InboundSyncMode,
 		"inbound_tags":          string(inboundTagsJSON),
+		"outbound_tag":          in.OutboundTag,
 	}
 	if err := db.Model(model.Node{}).Where("id = ?", id).Updates(updates).Error; err != nil {
 		return err
@@ -353,8 +365,26 @@ func (s *NodeService) GetRemoteInboundOptions(ctx context.Context, n *model.Node
 	if err := s.normalize(n); err != nil {
 		return nil, err
 	}
-	return runtime.NewRemote(n).ListInboundOptions(ctx)
+	if n.OutboundTag == "" {
+		return runtime.NewRemote(n, nil).ListInboundOptions(ctx)
+	}
+	// Mirror ProbeWithOutbound: a node being added/edited has no persistent
+	// egress bridge yet, so route the list call through a temporary one or the
+	// remote panel stays unreachable and the request times out.
+	var options []runtime.RemoteInboundOption
+	var err error
+	s.withOutboundBridge(n.Id, n.OutboundTag, func(proxyURL string) {
+		options, err = runtime.NewRemote(n, staticEgressResolver(proxyURL)).ListInboundOptions(ctx)
+	})
+	return options, err
 }
+
+// staticEgressResolver hands a fixed proxy URL to runtime.NewRemote. An empty
+// string yields a direct connection, so it doubles as the graceful fallback
+// when a temporary bridge can't be built.
+type staticEgressResolver string
+
+func (r staticEgressResolver) NodeEgressProxyURL(int) string { return string(r) }
 
 // EnsureInboundTagAllowed adds a panel-managed inbound's tag to the node's
 // selection when the node syncs in "selected" mode. Without it, the next
@@ -376,10 +406,8 @@ func (s *NodeService) EnsureInboundTagAllowed(nodeID int, tag string) error {
 	if node.InboundSyncMode != "selected" {
 		return nil
 	}
-	for _, t := range node.InboundTags {
-		if t == tag {
-			return nil
-		}
+	if slices.Contains(node.InboundTags, tag) {
+		return nil
 	}
 	buf, err := json.Marshal(append(node.InboundTags, tag))
 	if err != nil {
@@ -411,11 +439,23 @@ func FilterNodeSnapshot(n *model.Node, snap *runtime.TrafficSnapshot) {
 
 func (s *NodeService) Delete(id int) error {
 	db := database.GetDB()
+	// Capture the node's guid before deleting the row so we can drop its per-node
+	// IP attribution (NodeClientIp is keyed by guid, not node id).
+	var guid string
+	var n model.Node
+	if err := db.Select("guid").Where("id = ?", id).First(&n).Error; err == nil {
+		guid = n.Guid
+	}
 	if err := db.Where("id = ?", id).Delete(model.Node{}).Error; err != nil {
 		return err
 	}
 	if err := db.Where("node_id = ?", id).Delete(&model.NodeClientTraffic{}).Error; err != nil {
 		return err
+	}
+	if guid != "" {
+		if err := db.Where("node_guid = ?", guid).Delete(&model.NodeClientIp{}).Error; err != nil {
+			return err
+		}
 	}
 	if mgr := runtime.GetManager(); mgr != nil {
 		mgr.InvalidateNode(id)
@@ -427,7 +467,13 @@ func (s *NodeService) Delete(id int) error {
 
 func (s *NodeService) SetEnable(id int, enable bool) error {
 	db := database.GetDB()
-	return db.Model(model.Node{}).Where("id = ?", id).Update("enable", enable).Error
+	if err := db.Model(model.Node{}).Where("id = ?", id).Update("enable", enable).Error; err != nil {
+		return err
+	}
+	if mgr := runtime.GetManager(); mgr != nil {
+		mgr.InvalidateNode(id)
+	}
+	return nil
 }
 
 // GetWebCertFiles asks a node for its own web TLS certificate/key file paths,
@@ -515,6 +561,8 @@ func (s *NodeService) UpdateHeartbeat(id int, p HeartbeatPatch) error {
 		"cpu_pct":        p.CpuPct,
 		"mem_pct":        p.MemPct,
 		"uptime_secs":    p.UptimeSecs,
+		"net_up":         p.NetUp,
+		"net_down":       p.NetDown,
 		"last_error":     p.LastError,
 		"xray_state":     p.XrayState,
 		"xray_error":     p.XrayError,
@@ -531,6 +579,8 @@ func (s *NodeService) UpdateHeartbeat(id int, p HeartbeatPatch) error {
 		now := time.Unix(p.LastHeartbeat, 0)
 		nodeMetrics.append(nodeMetricKey(id, "cpu"), now, p.CpuPct)
 		nodeMetrics.append(nodeMetricKey(id, "mem"), now, p.MemPct)
+		nodeMetrics.append(nodeMetricKey(id, "netUp"), now, float64(p.NetUp))
+		nodeMetrics.append(nodeMetricKey(id, "netDown"), now, float64(p.NetDown))
 	}
 	return nil
 }
@@ -588,6 +638,131 @@ func (s *NodeService) AggregateNodeMetric(id int, metric string, bucketSeconds i
 }
 
 func (s *NodeService) Probe(ctx context.Context, n *model.Node) (HeartbeatPatch, error) {
+	proxyURL := ""
+	if n.OutboundTag != "" {
+		if mgr := runtime.GetManager(); mgr != nil {
+			proxyURL = mgr.NodeEgressProxyURL(n.Id)
+		}
+	}
+	return s.probe(ctx, n, proxyURL)
+}
+
+func (s *NodeService) ProbeWithOutbound(ctx context.Context, n *model.Node, outboundTag string) (HeartbeatPatch, error) {
+	if outboundTag == "" {
+		return s.Probe(ctx, n)
+	}
+	var patch HeartbeatPatch
+	var err error
+	s.withOutboundBridge(n.Id, outboundTag, func(proxyURL string) {
+		if proxyURL == "" {
+			patch, err = s.Probe(ctx, n)
+			return
+		}
+		patch, err = s.probe(ctx, n, proxyURL)
+	})
+	return patch, err
+}
+
+// withOutboundBridge stands up a temporary loopback SOCKS5 inbound in the
+// running Xray, routes it through outboundTag, and runs fn with the bridge's
+// proxy URL before tearing it down. It is used to reach a node through its
+// connection outbound before the persistent egress bridge has been injected
+// into the config (e.g. while the node is still being added or edited). When
+// Xray isn't running or the bridge can't be built, fn runs with an empty
+// proxyURL so callers fall back to a direct connection.
+func (s *NodeService) withOutboundBridge(nodeID int, outboundTag string, fn func(proxyURL string)) {
+	proc := XrayProcess()
+	if proc == nil || !proc.IsRunning() {
+		fn("")
+		return
+	}
+	apiPort := proc.GetAPIPort()
+	if apiPort <= 0 {
+		fn("")
+		return
+	}
+
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		fn("")
+		return
+	}
+	port := listener.Addr().(*net.TCPAddr).Port
+	listener.Close()
+
+	tag := fmt.Sprintf("node-test-%d-%d", nodeID, time.Now().UnixNano())
+	proxyURL := fmt.Sprintf("socks5://127.0.0.1:%d", port)
+
+	inboundJSON, err := json.Marshal(xray.InboundConfig{
+		Listen:   json_util.RawMessage(`"127.0.0.1"`),
+		Port:     port,
+		Protocol: "socks",
+		Settings: json_util.RawMessage(`{"auth":"noauth","udp":false}`),
+		Tag:      tag,
+	})
+	if err != nil {
+		fn("")
+		return
+	}
+
+	cfg := proc.GetConfig()
+	routing := map[string]any{}
+	if len(cfg.RouterConfig) > 0 {
+		_ = json.Unmarshal(cfg.RouterConfig, &routing)
+	}
+	rules, _ := routing["rules"].([]any)
+	rule := map[string]any{
+		"type":       "field",
+		"inboundTag": []any{tag},
+	}
+	if routingTagIsBalancer(routing, outboundTag) {
+		rule["balancerTag"] = outboundTag
+	} else {
+		rule["outboundTag"] = outboundTag
+	}
+	routing["rules"] = append([]any{rule}, rules...)
+	routingJSON, err := json.Marshal(routing)
+	if err != nil {
+		fn("")
+		return
+	}
+	originalRoutingJSON := cfg.RouterConfig
+
+	api := xray.XrayAPI{}
+	if err := api.Init(apiPort); err != nil {
+		fn("")
+		return
+	}
+	defer api.Close()
+
+	if err := api.AddInbound(inboundJSON); err != nil {
+		fn("")
+		return
+	}
+	defer func() {
+		if err := api.DelInbound(tag); err != nil {
+			logger.Warning("remove temp node bridge inbound failed:", err)
+		}
+	}()
+
+	if err := api.ApplyRoutingConfig(routingJSON); err != nil {
+		fn("")
+		return
+	}
+	defer func() {
+		restore := originalRoutingJSON
+		if len(restore) == 0 {
+			restore = []byte("{}")
+		}
+		if err := api.ApplyRoutingConfig(restore); err != nil {
+			logger.Warning("restore routing after node bridge failed:", err)
+		}
+	}()
+
+	fn(proxyURL)
+}
+
+func (s *NodeService) probe(ctx context.Context, n *model.Node, proxyURL string) (HeartbeatPatch, error) {
 	patch := HeartbeatPatch{LastHeartbeat: time.Now().Unix()}
 
 	addr, err := netsafe.NormalizeHost(n.Address)
@@ -621,7 +796,7 @@ func (s *NodeService) Probe(ctx context.Context, n *model.Node) (HeartbeatPatch,
 	}
 	req.Header.Set("Accept", "application/json")
 
-	client, err := runtime.HTTPClientForNode(n)
+	client, err := runtime.HTTPClientForNode(n, proxyURL)
 	if err != nil {
 		patch.LastError = err.Error()
 		return patch, err
@@ -658,6 +833,10 @@ func (s *NodeService) Probe(ctx context.Context, n *model.Node) (HeartbeatPatch,
 			PanelVersion string `json:"panelVersion"`
 			PanelGuid    string `json:"panelGuid"`
 			Uptime       uint64 `json:"uptime"`
+			NetIO        struct {
+				Up   uint64 `json:"up"`
+				Down uint64 `json:"down"`
+			} `json:"netIO"`
 		} `json:"obj"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&envelope); err != nil {
@@ -679,6 +858,8 @@ func (s *NodeService) Probe(ctx context.Context, n *model.Node) (HeartbeatPatch,
 	patch.PanelVersion = o.PanelVersion
 	patch.Guid = o.PanelGuid
 	patch.UptimeSecs = o.Uptime
+	patch.NetUp = o.NetIO.Up
+	patch.NetDown = o.NetIO.Down
 	return patch, nil
 }
 
