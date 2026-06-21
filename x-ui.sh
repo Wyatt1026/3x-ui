@@ -6,6 +6,11 @@ blue='\033[0;34m'
 yellow='\033[0;33m'
 plain='\033[0m'
 
+xui_repo="${XUI_REPO:-MHSanaei/3x-ui}"
+xui_branch="${XUI_BRANCH:-main}"
+xui_raw_url="https://raw.githubusercontent.com/${xui_repo}/${xui_branch}"
+xui_raw_base_url="https://raw.githubusercontent.com/${xui_repo}"
+
 #Add some basic function here
 function LOGD() {
     echo -e "${yellow}[DEG] $* ${plain}"
@@ -129,7 +134,7 @@ before_show_menu() {
 }
 
 install() {
-    bash <(curl -Ls https://raw.githubusercontent.com/MHSanaei/3x-ui/main/install.sh)
+    XUI_REPO="${xui_repo}" XUI_BRANCH="${xui_branch}" bash <(curl -Ls "${xui_raw_url}/install.sh")
     if [[ $? == 0 ]]; then
         if [[ $# == 0 ]]; then
             start
@@ -148,7 +153,7 @@ update() {
         fi
         return 0
     fi
-    bash <(curl -Ls https://raw.githubusercontent.com/MHSanaei/3x-ui/main/update.sh)
+    XUI_REPO="${xui_repo}" XUI_BRANCH="${xui_branch}" bash <(curl -Ls "${xui_raw_url}/update.sh")
     if [[ $? == 0 ]]; then
         LOGI "Update is complete, Panel has automatically restarted "
         before_show_menu
@@ -166,7 +171,7 @@ update_menu() {
         return 0
     fi
 
-    curl -fLRo /usr/bin/x-ui https://raw.githubusercontent.com/MHSanaei/3x-ui/main/x-ui.sh
+    curl -fLRo /usr/bin/x-ui "${xui_raw_url}/x-ui.sh"
     chmod +x ${xui_folder}/x-ui.sh
     chmod +x /usr/bin/x-ui
 
@@ -188,7 +193,7 @@ legacy_version() {
         exit 1
     fi
     # Use the entered panel version in the download link
-    install_command="bash <(curl -Ls "https://raw.githubusercontent.com/mhsanaei/3x-ui/v$tag_version/install.sh") v$tag_version"
+    install_command="XUI_REPO=${xui_repo} bash <(curl -Ls \"${xui_raw_base_url}/v$tag_version/install.sh\") v$tag_version"
 
     echo "Downloading and installing panel version $tag_version..."
     eval $install_command
@@ -242,7 +247,7 @@ uninstall() {
     echo ""
     echo -e "Uninstalled Successfully.\n"
     echo "If you need to install this panel again, you can use below command:"
-    echo -e "${green}bash <(curl -Ls https://raw.githubusercontent.com/mhsanaei/3x-ui/master/install.sh)${plain}"
+    echo -e "${green}XUI_REPO=${xui_repo} XUI_BRANCH=${xui_branch} bash <(curl -Ls ${xui_raw_url}/install.sh)${plain}"
     echo ""
     # Trap the SIGTERM signal
     trap delete_script SIGTERM
@@ -775,7 +780,7 @@ enable_bbr() {
 }
 
 update_shell() {
-    curl -fLRo /usr/bin/x-ui -z /usr/bin/x-ui https://github.com/MHSanaei/3x-ui/raw/main/x-ui.sh
+    curl -fLRo /usr/bin/x-ui -z /usr/bin/x-ui "${xui_raw_url}/x-ui.sh"
     if [[ $? != 0 ]]; then
         echo ""
         LOGE "Failed to download script, Please check whether the machine can connect Github"

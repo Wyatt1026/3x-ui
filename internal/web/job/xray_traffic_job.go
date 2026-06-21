@@ -2,6 +2,7 @@ package job
 
 import (
 	"encoding/json"
+	"time"
 
 	"github.com/mhsanaei/3x-ui/v3/internal/logger"
 	"github.com/mhsanaei/3x-ui/v3/internal/web/service"
@@ -19,6 +20,13 @@ type XrayTrafficJob struct {
 	inboundService  service.InboundService
 	outboundService outbound.OutboundService
 }
+
+// Xray's statsUserOnline map is reference-counted inside the Xray process.
+// In normal disconnects the core removes entries immediately, but abrupt client
+// failures can leave a stale reference behind until Xray restarts. Keep the API
+// signal long enough to cover idle connections around Xray's default connIdle
+// window (300s), while preventing leaked references from being refreshed forever.
+const onlineAPIStaleAfter = 6 * time.Minute
 
 // NewXrayTrafficJob creates a new traffic collection job instance.
 func NewXrayTrafficJob() *XrayTrafficJob {
@@ -86,13 +94,8 @@ func (j *XrayTrafficJob) Run() {
 	if onlineUsers, apiMode, ouErr := j.xrayService.GetOnlineUsers(); ouErr != nil {
 		logger.Debug("get online users from xray api failed:", ouErr)
 	} else if apiMode {
-		idleOnline := make([]string, 0, len(onlineUsers))
-		for _, u := range onlineUsers {
-			if !deltaActive[u.Email] {
-				activeEmails = append(activeEmails, u.Email)
-				idleOnline = append(idleOnline, u.Email)
-			}
-		}
+		idleOnline := freshOnlineAPIEmails(onlineUsers, deltaActive, time.Now())
+		activeEmails = append(activeEmails, idleOnline...)
 		// The traffic path only bumps last_online on a non-zero delta; keep the
 		// column fresh for clients kept online purely by a live connection.
 		if err := j.inboundService.BumpClientsLastOnline(idleOnline); err != nil {
@@ -156,6 +159,35 @@ func (j *XrayTrafficJob) Run() {
 	} else if err != nil {
 		logger.Warning("get all outbounds for websocket failed:", err)
 	}
+}
+
+func freshOnlineAPIEmails(users []xray.OnlineUser, alreadyActive map[string]bool, now time.Time) []string {
+	if len(users) == 0 {
+		return nil
+	}
+	nowUnix := now.Unix()
+	maxAge := int64(onlineAPIStaleAfter / time.Second)
+	seen := make(map[string]struct{}, len(users))
+	emails := make([]string, 0, len(users))
+	for _, u := range users {
+		if u.Email == "" || alreadyActive[u.Email] {
+			continue
+		}
+		if _, ok := seen[u.Email]; ok {
+			continue
+		}
+		for _, ip := range u.IPs {
+			if ip.IP == "" {
+				continue
+			}
+			if ip.LastSeen <= 0 || ip.LastSeen > nowUnix || nowUnix-ip.LastSeen <= maxAge {
+				seen[u.Email] = struct{}{}
+				emails = append(emails, u.Email)
+				break
+			}
+		}
+	}
+	return emails
 }
 
 func (j *XrayTrafficJob) informTrafficToExternalAPI(inboundTraffics []*xray.Traffic, clientTraffics []*xray.ClientTraffic) {

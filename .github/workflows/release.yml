@@ -2,6 +2,11 @@ name: Release 3X-UI
 
 on:
   workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to publish from this commit (e.g. v3.3.1-test.1). Leave empty to build artifacts only."
+        required: false
+        type: string
   push:
     branches:
       - "**"
@@ -28,7 +33,50 @@ on:
       - "x-ui.service.rhel"
 
 jobs:
+  prepare-release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    outputs:
+      release_tag: ${{ steps.resolve.outputs.release_tag }}
+      should_publish: ${{ steps.resolve.outputs.should_publish }}
+    steps:
+      - name: Resolve release tag
+        id: resolve
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          INPUT_TAG: ${{ inputs.tag }}
+          REF_TYPE: ${{ github.ref_type }}
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          TAG=""
+          SHOULD_PUBLISH="false"
+          if [ "$EVENT_NAME" = "workflow_dispatch" ] && [ -n "$INPUT_TAG" ]; then
+            TAG="$INPUT_TAG"
+            SHOULD_PUBLISH="true"
+          elif [ "$REF_TYPE" = "tag" ]; then
+            TAG="$REF_NAME"
+            SHOULD_PUBLISH="true"
+          fi
+          echo "release_tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "should_publish=$SHOULD_PUBLISH" >> "$GITHUB_OUTPUT"
+
+      - name: Create manual release at this commit
+        if: github.event_name == 'workflow_dispatch' && steps.resolve.outputs.should_publish == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.resolve.outputs.release_tag }}
+        run: |
+          gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1 && exit 0
+          gh release create "$TAG" \
+            --repo "$GITHUB_REPOSITORY" \
+            --target "$GITHUB_SHA" \
+            --prerelease \
+            --title "$TAG" \
+            --notes "Manual test release for $GITHUB_SHA"
+
   build:
+    needs: prepare-release
     permissions:
       contents: write
     strategy:
@@ -51,6 +99,12 @@ jobs:
         with:
           go-version-file: go.mod
           check-latest: true
+
+      - name: Set release version
+        if: needs.prepare-release.outputs.should_publish == 'true'
+        run: |
+          TAG="${{ needs.prepare-release.outputs.release_tag }}"
+          printf '%s\n' "${TAG#v}" > internal/config/version
 
       # Frontend dist must be built BEFORE go build — Go's //go:embed
       # all:dist directive in internal/web/web.go requires internal/web/dist/ to exist
@@ -173,10 +227,10 @@ jobs:
 
       - name: Upload files to GH release
         uses: svenstaro/upload-release-action@v2
-        if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
+        if: needs.prepare-release.outputs.should_publish == 'true'
         with:
           repo_token: ${{ secrets.GITHUB_TOKEN }}
-          tag: ${{ github.ref_name }}
+          tag: ${{ needs.prepare-release.outputs.release_tag }}
           file: x-ui-linux-${{ matrix.platform }}.tar.gz
           asset_name: x-ui-linux-${{ matrix.platform }}.tar.gz
           overwrite: true
@@ -187,6 +241,7 @@ jobs:
   # =================================
   build-windows:
     name: Build for Windows
+    needs: prepare-release
     permissions:
       contents: write
     strategy:
@@ -203,6 +258,16 @@ jobs:
         with:
           go-version-file: go.mod
           check-latest: true
+
+      - name: Set release version
+        if: needs.prepare-release.outputs.should_publish == 'true'
+        shell: pwsh
+        run: |
+          $tag = "${{ needs.prepare-release.outputs.release_tag }}"
+          if ($tag.StartsWith("v")) {
+            $tag = $tag.Substring(1)
+          }
+          Set-Content -Path internal/config/version -Value $tag -NoNewline
 
       # Frontend dist must be built BEFORE go build — see comment on the
       # Linux job above. This step is identical except npm runs on the
@@ -294,10 +359,10 @@ jobs:
 
       - name: Upload files to GH release
         uses: svenstaro/upload-release-action@v2
-        if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
+        if: needs.prepare-release.outputs.should_publish == 'true'
         with:
           repo_token: ${{ secrets.GITHUB_TOKEN }}
-          tag: ${{ github.ref_name }}
+          tag: ${{ needs.prepare-release.outputs.release_tag }}
           file: x-ui-windows-amd64.zip
           asset_name: x-ui-windows-amd64.zip
           overwrite: true
