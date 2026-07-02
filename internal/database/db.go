@@ -4,13 +4,17 @@ package database
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log"
 	"math"
 	"os"
+	"os/exec"
 	"path"
+	"runtime"
 	"slices"
 	"strconv"
 	"strings"
@@ -40,7 +44,7 @@ func IsPostgres() bool {
 	if db == nil {
 		return config.GetDBKind() == "postgres"
 	}
-	return db.Dialector.Name() == "postgres"
+	return db.Name() == "postgres"
 }
 
 // Dialect returns the active GORM dialect name, or "" if the DB is not open.
@@ -48,7 +52,7 @@ func Dialect() string {
 	if db == nil {
 		return ""
 	}
-	return db.Dialector.Name()
+	return db.Name()
 }
 
 const (
@@ -79,6 +83,9 @@ func initModels() error {
 		&model.OutboundSubscription{},
 	}
 	for _, mdl := range models {
+		if IsPostgres() && postgresModelSettled(mdl) {
+			continue
+		}
 		if err := db.AutoMigrate(mdl); err != nil {
 			if isIgnorableDuplicateColumnErr(err, mdl) {
 				log.Printf("Ignoring duplicate column during auto migration for %T: %v", mdl, err)
@@ -87,6 +94,12 @@ func initModels() error {
 			log.Printf("Error auto migrating model: %v", err)
 			return err
 		}
+	}
+	if err := migrateHostVerifyPeerCertByNameColumn(); err != nil {
+		return err
+	}
+	if err := normalizeApiTokenCreatedAtSeconds(); err != nil {
+		return err
 	}
 	if err := dropLegacyForeignKeys(); err != nil {
 		return err
@@ -109,6 +122,30 @@ func initModels() error {
 	return nil
 }
 
+// postgresModelSettled skips AutoMigrate when table, columns, and indexes all exist:
+// its catalog-filtered column probe misdetects on some setups and re-ADDs columns forever (#5665).
+func postgresModelSettled(mdl any) bool {
+	migrator := db.Migrator()
+	if !migrator.HasTable(mdl) {
+		return false
+	}
+	stmt := &gorm.Statement{DB: db}
+	if err := stmt.Parse(mdl); err != nil || stmt.Schema == nil {
+		return false
+	}
+	for _, dbName := range stmt.Schema.DBNames {
+		if !migrator.HasColumn(mdl, dbName) {
+			return false
+		}
+	}
+	for _, idx := range stmt.Schema.ParseIndexes() {
+		if !migrator.HasIndex(mdl, idx.Name) {
+			return false
+		}
+	}
+	return true
+}
+
 func dropLegacyForeignKeys() error {
 	if !IsPostgres() {
 		return nil
@@ -118,6 +155,41 @@ func dropLegacyForeignKeys() error {
 		return err
 	}
 	return nil
+}
+
+// migrateHostVerifyPeerCertByNameColumn converts hosts.verify_peer_cert_by_name
+// from its original boolean shape to the comma-separated string xray-core's
+// verifyPeerCertByName (vcn) actually expects. The legacy boolean was dead
+// (never emitted into links), so its value carries no meaning and is discarded.
+// Idempotent by construction (no HistoryOfSeeders row — writing one here would
+// flip the fresh-DB detection in runSeeders). Runs right after AutoMigrate,
+// before anything reads or writes Host rows (critical on Postgres, where the
+// column stays boolean-typed until the ALTER below).
+func migrateHostVerifyPeerCertByNameColumn() error {
+	if !db.Migrator().HasColumn(&model.Host{}, "verify_peer_cert_by_name") {
+		return nil
+	}
+	if IsPostgres() {
+		// Only convert a still-boolean column; once it is text this is a no-op,
+		// so a user-set name is never wiped on a later restart.
+		var dataType string
+		if err := db.Raw(
+			`SELECT data_type FROM information_schema.columns WHERE table_name = 'hosts' AND column_name = 'verify_peer_cert_by_name'`,
+		).Scan(&dataType).Error; err != nil {
+			return err
+		}
+		if dataType != "boolean" {
+			return nil
+		}
+		if err := db.Exec(`ALTER TABLE hosts ALTER COLUMN verify_peer_cert_by_name DROP DEFAULT`).Error; err != nil {
+			return err
+		}
+		return db.Exec(`ALTER TABLE hosts ALTER COLUMN verify_peer_cert_by_name TYPE text USING ''`).Error
+	}
+	// SQLite keeps the original numeric-affinity column; blank any legacy
+	// integer/null value so it doesn't read back as "0"/"1". After conversion
+	// every value is text, so re-running touches nothing.
+	return db.Exec(`UPDATE hosts SET verify_peer_cert_by_name = '' WHERE verify_peer_cert_by_name IS NULL OR typeof(verify_peer_cert_by_name) <> 'text'`).Error
 }
 
 // seedHostsFromExternalProxy is a one-time, self-gated migration that creates a
@@ -139,30 +211,188 @@ func seedHostsFromExternalProxy() error {
 
 	return db.Transaction(func(tx *gorm.DB) error {
 		for _, inbound := range inbounds {
-			if strings.TrimSpace(inbound.StreamSettings) == "" {
-				continue
-			}
-			var stream map[string]any
-			if err := json.Unmarshal([]byte(inbound.StreamSettings), &stream); err != nil {
-				log.Printf("HostsFromExternalProxy: skip inbound %d (invalid stream json): %v", inbound.Id, err)
-				continue
-			}
-			eps, ok := stream["externalProxy"].([]any)
-			if !ok || len(eps) == 0 {
-				continue
-			}
-			for i, raw := range eps {
-				ep, ok := raw.(map[string]any)
-				if !ok {
-					continue
-				}
-				if err := tx.Create(externalProxyEntryToHost(inbound.Id, i, ep)).Error; err != nil {
-					return err
-				}
+			if _, err := CreateHostsFromExternalProxy(tx, inbound.Id, inbound.StreamSettings); err != nil {
+				return err
 			}
 		}
 		return tx.Create(&model.HistoryOfSeeders{SeederName: "HostsFromExternalProxy"}).Error
 	})
+}
+
+// seedWireguardPeersToClients is a one-time, self-gated migration that converts
+// legacy single-config WireGuard inbounds into the multi-client model: each
+// settings.peers[] entry becomes a managed client in the clients table attached
+// to the inbound, and the inbound settings are rewritten so peers becomes a
+// clients[] array (GetXrayConfig re-projects clients back to peers for xray).
+// Idempotent: gated on the history row and skipped per-inbound once it already
+// has client links.
+func seedWireguardPeersToClients() error {
+	var history []string
+	if err := db.Model(&model.HistoryOfSeeders{}).Pluck("seeder_name", &history).Error; err != nil {
+		return err
+	}
+	if slices.Contains(history, "WireguardPeersToClients") {
+		return nil
+	}
+
+	var inbounds []model.Inbound
+	if err := db.Where("protocol = ?", string(model.WireGuard)).Find(&inbounds).Error; err != nil {
+		return err
+	}
+
+	return db.Transaction(func(tx *gorm.DB) error {
+		usedEmails := map[string]struct{}{}
+		var existingEmails []string
+		if err := tx.Model(&model.ClientRecord{}).Pluck("email", &existingEmails).Error; err != nil {
+			return err
+		}
+		for _, e := range existingEmails {
+			usedEmails[e] = struct{}{}
+		}
+
+		for _, inbound := range inbounds {
+			if strings.TrimSpace(inbound.Settings) == "" {
+				continue
+			}
+			var settings map[string]any
+			if err := json.Unmarshal([]byte(inbound.Settings), &settings); err != nil {
+				log.Printf("WireguardPeersToClients: skip inbound %d (invalid settings json): %v", inbound.Id, err)
+				continue
+			}
+			peers, ok := settings["peers"].([]any)
+			if !ok || len(peers) == 0 {
+				continue
+			}
+
+			var linkCount int64
+			if err := tx.Model(&model.ClientInbound{}).Where("inbound_id = ?", inbound.Id).Count(&linkCount).Error; err != nil {
+				return err
+			}
+			if linkCount > 0 {
+				continue
+			}
+
+			clientObjs := make([]any, 0, len(peers))
+			for i, raw := range peers {
+				obj, ok := raw.(map[string]any)
+				if !ok {
+					continue
+				}
+				email := wireguardPeerEmail(inbound.Remark, obj, i, usedEmails)
+				usedEmails[email] = struct{}{}
+				obj["email"] = email
+				if sub, _ := obj["subId"].(string); strings.TrimSpace(sub) == "" {
+					obj["subId"] = random.NumLower(16)
+				}
+				if _, ok := obj["enable"]; !ok {
+					obj["enable"] = true
+				}
+
+				blob, err := json.Marshal(obj)
+				if err != nil {
+					continue
+				}
+				var c model.Client
+				if err := json.Unmarshal(blob, &c); err != nil {
+					log.Printf("WireguardPeersToClients: skip peer in inbound %d: %v", inbound.Id, err)
+					continue
+				}
+				c.Email = email
+
+				incoming := c.ToRecord()
+				var row model.ClientRecord
+				err = tx.Where("email = ?", email).First(&row).Error
+				if errors.Is(err, gorm.ErrRecordNotFound) {
+					if err := tx.Create(incoming).Error; err != nil {
+						return err
+					}
+					row = *incoming
+				} else if err != nil {
+					return err
+				} else {
+					model.MergeClientRecord(&row, incoming)
+					if err := tx.Save(&row).Error; err != nil {
+						return err
+					}
+				}
+
+				link := model.ClientInbound{ClientId: row.Id, InboundId: inbound.Id}
+				if err := tx.Where("client_id = ? AND inbound_id = ?", row.Id, inbound.Id).
+					FirstOrCreate(&link).Error; err != nil {
+					return err
+				}
+
+				clientObjs = append(clientObjs, obj)
+			}
+
+			delete(settings, "peers")
+			settings["clients"] = clientObjs
+			newSettings, err := json.Marshal(settings)
+			if err != nil {
+				return err
+			}
+			if err := tx.Model(&model.Inbound{}).Where("id = ?", inbound.Id).
+				Update("settings", string(newSettings)).Error; err != nil {
+				return err
+			}
+		}
+		return tx.Create(&model.HistoryOfSeeders{SeederName: "WireguardPeersToClients"}).Error
+	})
+}
+
+// wireguardPeerEmail derives a stable, unique client email for a migrated peer
+// from the inbound remark plus the peer's comment (or its 1-based index).
+func wireguardPeerEmail(remark string, peer map[string]any, index int, used map[string]struct{}) string {
+	base := strings.TrimSpace(remark)
+	if base == "" {
+		base = "wg"
+	}
+	suffix := strconv.Itoa(index + 1)
+	if c, ok := peer["comment"].(string); ok && strings.TrimSpace(c) != "" {
+		suffix = strings.TrimSpace(c)
+	}
+	email := strings.ReplaceAll(base+"-"+suffix, " ", "-")
+	candidate := email
+	for n := 2; ; n++ {
+		if _, taken := used[candidate]; !taken {
+			return candidate
+		}
+		candidate = email + "-" + strconv.Itoa(n)
+	}
+}
+
+// CreateHostsFromExternalProxy parses a legacy streamSettings.externalProxy array
+// and inserts one Host row per entry on tx, returning the number of rows created.
+// It is the shared core of both the one-time seedHostsFromExternalProxy startup
+// migration and the inbound-import path: an inbound exported from a build that
+// predated the hosts table carries its external proxies inline in
+// streamSettings.externalProxy, and the startup migration is gated off after its
+// first run, so a freshly imported inbound must be converted here instead. Blank
+// or malformed streamSettings, or one without externalProxy entries, is a no-op.
+func CreateHostsFromExternalProxy(tx *gorm.DB, inboundId int, streamSettings string) (int, error) {
+	if strings.TrimSpace(streamSettings) == "" {
+		return 0, nil
+	}
+	var stream map[string]any
+	if err := json.Unmarshal([]byte(streamSettings), &stream); err != nil {
+		return 0, nil
+	}
+	eps, ok := stream["externalProxy"].([]any)
+	if !ok || len(eps) == 0 {
+		return 0, nil
+	}
+	created := 0
+	for i, raw := range eps {
+		ep, ok := raw.(map[string]any)
+		if !ok {
+			continue
+		}
+		if err := tx.Create(externalProxyEntryToHost(inboundId, i, ep)).Error; err != nil {
+			return created, err
+		}
+		created++
+	}
+	return created, nil
 }
 
 // externalProxyEntryToHost maps one legacy externalProxy entry onto a Host.
@@ -303,7 +533,6 @@ func initUser() error {
 	}
 	if empty {
 		hashedPassword, err := crypto.HashPasswordAsBcrypt(defaultPassword)
-
 		if err != nil {
 			log.Printf("Error hashing default password: %v", err)
 			return err
@@ -327,7 +556,7 @@ func runSeeders(isUsersEmpty bool) error {
 	}
 
 	if empty && isUsersEmpty {
-		seeders := []string{"UserPasswordHash", "ClientsTable", "InboundClientsArrayFix", "InboundClientTgIdFix", "InboundClientSubIdFix", "FreedomFinalRulesReverseFix", "ApiTokensHash", "LegacyProxySettingsCleanup"}
+		seeders := []string{"UserPasswordHash", "ClientsTable", "InboundClientsArrayFix", "InboundClientTgIdFix", "InboundClientSubIdFix", "FreedomFinalRulesReverseFix", "ApiTokensHash", "LegacyProxySettingsCleanup", "WireguardPeersToClients"}
 		for _, name := range seeders {
 			if err := db.Create(&model.HistoryOfSeeders{SeederName: name}).Error; err != nil {
 				return err
@@ -425,7 +654,107 @@ func runSeeders(isUsersEmpty bool) error {
 	if err := seedHostsFromExternalProxy(); err != nil {
 		return err
 	}
+
+	// Self-gated on the "ResetIpLimitNoFail2ban" row.
+	if err := resetIpLimitsWithoutFail2ban(); err != nil {
+		return err
+	}
+
+	// Self-gated on the "WireguardPeersToClients" row.
+	if err := seedWireguardPeersToClients(); err != nil {
+		return err
+	}
 	return nil
+}
+
+// resetIpLimitsWithoutFail2ban zeroes every client's IP limit on hosts where
+// fail2ban can't enforce it (not installed, or the integration disabled). The
+// limit silently does nothing there yet kept logging a repeated warning, so a
+// stale value is just misleading — the panel also disables the field on these
+// hosts. One-time, self-gated on the seeder row.
+func resetIpLimitsWithoutFail2ban() error {
+	var history []string
+	if err := db.Model(&model.HistoryOfSeeders{}).Pluck("seeder_name", &history).Error; err != nil {
+		return err
+	}
+	if slices.Contains(history, "ResetIpLimitNoFail2ban") {
+		return nil
+	}
+
+	if fail2banCanEnforce() {
+		return db.Create(&model.HistoryOfSeeders{SeederName: "ResetIpLimitNoFail2ban"}).Error
+	}
+
+	var inbounds []model.Inbound
+	if err := db.Find(&inbounds).Error; err != nil {
+		return err
+	}
+
+	return db.Transaction(func(tx *gorm.DB) error {
+		for _, inbound := range inbounds {
+			if strings.TrimSpace(inbound.Settings) == "" {
+				continue
+			}
+			var settings map[string]any
+			if err := json.Unmarshal([]byte(inbound.Settings), &settings); err != nil {
+				log.Printf("ResetIpLimitNoFail2ban: skip inbound %d (invalid settings json): %v", inbound.Id, err)
+				continue
+			}
+			clients, ok := settings["clients"].([]any)
+			if !ok {
+				continue
+			}
+			mutated := false
+			for i, raw := range clients {
+				obj, ok := raw.(map[string]any)
+				if !ok {
+					continue
+				}
+				v, present := obj["limitIp"]
+				if !present {
+					continue
+				}
+				if n, isNum := v.(float64); isNum && n == 0 {
+					continue
+				}
+				obj["limitIp"] = 0
+				clients[i] = obj
+				mutated = true
+			}
+			if !mutated {
+				continue
+			}
+			settings["clients"] = clients
+			newSettings, err := json.MarshalIndent(settings, "", "  ")
+			if err != nil {
+				log.Printf("ResetIpLimitNoFail2ban: skip inbound %d (marshal failed): %v", inbound.Id, err)
+				continue
+			}
+			if err := tx.Model(&model.Inbound{}).Where("id = ?", inbound.Id).
+				Update("settings", string(newSettings)).Error; err != nil {
+				return err
+			}
+		}
+		if err := tx.Model(&model.ClientRecord{}).Where("limit_ip <> ?", 0).
+			Update("limit_ip", 0).Error; err != nil {
+			return err
+		}
+		return tx.Create(&model.HistoryOfSeeders{SeederName: "ResetIpLimitNoFail2ban"}).Error
+	})
+}
+
+// fail2banCanEnforce reports whether per-client IP limits can actually be
+// enforced on this host: the integration must be enabled (XUI_ENABLE_FAIL2BAN)
+// and fail2ban-client must be present. Mirrors the service-layer check, kept
+// local to avoid an import cycle.
+func fail2banCanEnforce() bool {
+	if v, ok := os.LookupEnv("XUI_ENABLE_FAIL2BAN"); ok && v != "true" {
+		return false
+	}
+	if runtime.GOOS == "windows" {
+		return false
+	}
+	return exec.CommandContext(context.Background(), "fail2ban-client", "-h").Run() == nil
 }
 
 // clearLegacyProxySettings drops the deprecated panelProxy/tgBotProxy rows so a
@@ -883,10 +1212,13 @@ func InitDB(dbPath string) error {
 		}
 	default:
 		dir := path.Dir(dbPath)
-		if err = os.MkdirAll(dir, 0755); err != nil {
+		if err = os.MkdirAll(dir, 0o755); err != nil {
 			return err
 		}
-		dsn := dbPath + "?_journal_mode=DELETE&_busy_timeout=10000&_synchronous=FULL&_txlock=immediate"
+		// Keep journal_mode=DELETE so the DB stays a single file (no -wal/-shm
+		// sidecars). synchronous defaults to FULL for durability but is tunable.
+		sync := sqliteSynchronous()
+		dsn := dbPath + "?_journal_mode=DELETE&_busy_timeout=10000&_synchronous=" + sync + "&_txlock=immediate"
 		db, err = gorm.Open(sqlite.Open(dsn), c)
 		if err != nil {
 			return err
@@ -895,14 +1227,21 @@ func InitDB(dbPath string) error {
 		if err != nil {
 			return err
 		}
-		if _, err := sqlDB.Exec("PRAGMA journal_mode=DELETE"); err != nil {
-			return err
+		// Re-assert the DSN pragmas plus scan-friendly ones for large datasets.
+		// cache_size/mmap_size/temp_store create no extra files, so the single-file
+		// guarantee holds; they just cut disk I/O on the 50k-row hot paths.
+		pragmas := []string{
+			"PRAGMA journal_mode=DELETE",
+			"PRAGMA busy_timeout=10000",
+			"PRAGMA synchronous=" + sync,
+			fmt.Sprintf("PRAGMA cache_size=-%d", envInt("XUI_DB_CACHE_MB", 32)*1024),
+			fmt.Sprintf("PRAGMA mmap_size=%d", int64(envInt("XUI_DB_MMAP_MB", 256))*1024*1024),
+			"PRAGMA temp_store=MEMORY",
 		}
-		if _, err := sqlDB.Exec("PRAGMA busy_timeout=10000"); err != nil {
-			return err
-		}
-		if _, err := sqlDB.Exec("PRAGMA synchronous=FULL"); err != nil {
-			return err
+		for _, p := range pragmas {
+			if _, err := sqlDB.ExecContext(context.Background(), p); err != nil {
+				return err
+			}
 		}
 	}
 
@@ -937,6 +1276,30 @@ func InitDB(dbPath string) error {
 		return err
 	}
 	return runSeeders(isUsersEmpty)
+}
+
+// normalizeApiTokenCreatedAtSeconds repairs rows written while ApiToken used
+// autoCreateTime:milli. The threshold separates modern Unix milliseconds from
+// Unix seconds and makes this safe to run on every startup.
+func normalizeApiTokenCreatedAtSeconds() error {
+	return db.Model(&model.ApiToken{}).
+		Where("created_at >= ?", model.ApiTokenUnixMillisecondsThreshold).
+		UpdateColumn("created_at", gorm.Expr("created_at / ?", 1000)).Error
+}
+
+// sqliteSynchronous returns the SQLite synchronous mode, defaulting to FULL.
+// Whitelisted because the value is interpolated directly into a PRAGMA string.
+func sqliteSynchronous() string {
+	switch strings.ToUpper(strings.TrimSpace(os.Getenv("XUI_DB_SYNCHRONOUS"))) {
+	case "OFF":
+		return "OFF"
+	case "NORMAL":
+		return "NORMAL"
+	case "EXTRA":
+		return "EXTRA"
+	default:
+		return "FULL"
+	}
 }
 
 func envInt(key string, def int) int {

@@ -7,6 +7,7 @@ import { SizeFormatter, IntlUtil, ColorUtils } from '@/utils';
 import { InfinityIcon } from '@/components/ui';
 import { useDatepicker } from '@/hooks/useDatepicker';
 import type { NodeRecord } from '@/api/queries/useNodesQuery';
+import { coerceInboundJsonField } from '@/models/dbinbound';
 
 import { RowActionsCell } from './RowActions';
 import { InboundSpeedTag, isActiveSpeed } from './InboundSpeedTag';
@@ -51,19 +52,41 @@ export function useInboundColumns({
   const { datepicker } = useDatepicker();
 
   return useMemo(() => {
+    const fallbackClientCount = (record: DBInboundRecord): ClientCountEntry | null => {
+      const settings = coerceInboundJsonField(record.settings) as {
+        clients?: { email?: string; enable?: boolean }[];
+      };
+      const clients = Array.isArray(settings.clients) ? settings.clients : [];
+      if (clients.length === 0) return null;
+      const active = clients
+        .filter((client) => client.email && client.enable !== false)
+        .map((client) => client.email!);
+      const deactive = clients
+        .filter((client) => client.email && client.enable === false)
+        .map((client) => client.email!);
+      return {
+        clients: clients.length,
+        active,
+        deactive,
+        depleted: [],
+        expiring: [],
+        online: [],
+      };
+    };
+
     const cols: TableColumnType<DBInboundRecord>[] = [
       {
         title: 'ID',
         dataIndex: 'id',
         key: 'id',
         align: 'right',
-        width: 30,
+        width: 60,
       },
       {
         title: t('pages.inbounds.operate'),
         key: 'action',
         align: 'center',
-        width: 60,
+        width: 70,
         render: (_, record) => (
           <RowActionsCell
             record={record}
@@ -77,7 +100,7 @@ export function useInboundColumns({
         title: t('pages.inbounds.enable'),
         key: 'enable',
         align: 'center',
-        width: 35,
+        width: 80,
         render: (_, record) => (
           <Switch
             checked={record.enable}
@@ -93,7 +116,7 @@ export function useInboundColumns({
         dataIndex: 'remark',
         key: 'remark',
         align: 'center',
-        width: 60,
+        width: 90,
       });
     }
 
@@ -102,7 +125,7 @@ export function useInboundColumns({
         title: t('pages.inbounds.node'),
         key: 'node',
         align: 'center',
-        width: 60,
+        width: 130,
         render: (_, record) => {
           if (record.nodeId == null) {
             return <Tag color="default">{t('pages.inbounds.localPanel')}</Tag>;
@@ -128,7 +151,7 @@ export function useInboundColumns({
         dataIndex: 'subSortIndex',
         key: 'subSortIndex',
         align: 'right',
-        width: 70,
+        width: 90,
       });
     }
 
@@ -138,13 +161,13 @@ export function useInboundColumns({
         dataIndex: 'port',
         key: 'port',
         align: 'center',
-        width: 40,
+        width: 80,
       },
       {
         title: t('pages.inbounds.protocol'),
         key: 'protocol',
         align: 'left',
-        width: 130,
+        width: 190,
         render: (_, record) => {
           const tags: ReactElement[] = [<Tag key="p" color="purple">{record.protocol}</Tag>];
           if (record.isWireguard || record.isHysteria) {
@@ -172,16 +195,16 @@ export function useInboundColumns({
         title: t('clients'),
         key: 'clients',
         align: 'left',
-        width: 110,
+        width: 200,
         render: (_, record) => {
-          const cc = clientCount[record.id];
+          const cc = clientCount[record.id] || fallbackClientCount(record);
           if (!cc) return null;
           return (
             <>
               <Tag className="client-count-tag" style={{ margin: 0, marginRight: 4, padding: '0 2px' }}>
                 <TeamOutlined /> {cc.clients}
               </Tag>
-              {cc.active.length > 0 && (
+              {cc.active.length > 0 ? (
                 <Popover
                   title={t('subscription.active')}
                   content={(
@@ -192,6 +215,8 @@ export function useInboundColumns({
                 >
                   <Tag color="green" className="client-count-tag" style={{ margin: 0, marginRight: 4, padding: '0 2px' }}>{cc.active.length}</Tag>
                 </Popover>
+              ) : (
+                <Tag color="green" className="client-count-tag" style={{ margin: 0, marginRight: 4, padding: '0 2px' }}>0</Tag>
               )}
               {cc.deactive.length > 0 && (
                 <Popover
@@ -237,7 +262,7 @@ export function useInboundColumns({
         title: t('pages.inbounds.traffic'),
         key: 'traffic',
         align: 'center',
-        width: 90,
+        width: 140,
         render: (_, record) => (
           <Popover
             content={(
@@ -269,7 +294,7 @@ export function useInboundColumns({
         title: t('pages.inbounds.speed'),
         key: 'speed',
         align: 'center',
-        width: 90,
+        width: 110,
         render: (_, record) => {
           const speed = inboundSpeed[record.id];
           if (!isActiveSpeed(speed)) {
@@ -282,7 +307,7 @@ export function useInboundColumns({
         title: t('pages.inbounds.expireDate'),
         key: 'expiryTime',
         align: 'center',
-        width: 40,
+        width: 100,
         render: (_, record) => {
           if (record.expiryTime > 0) {
             return (

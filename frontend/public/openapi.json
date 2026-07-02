@@ -84,6 +84,9 @@
           "ldapInboundTags": {
             "type": "string"
           },
+          "ldapInsecureSkipVerify": {
+            "type": "boolean"
+          },
           "ldapInvertFlag": {
             "type": "boolean"
           },
@@ -160,6 +163,12 @@
             "description": "SMTP server host",
             "type": "string"
           },
+          "smtpMemory": {
+            "description": "Memory threshold for email notifications",
+            "maximum": 100,
+            "minimum": 0,
+            "type": "integer"
+          },
           "smtpPassword": {
             "description": "SMTP password",
             "type": "string"
@@ -221,6 +230,18 @@
           "subEncrypt": {
             "description": "Encrypt subscription responses",
             "type": "boolean"
+          },
+          "subHideSettings": {
+            "description": "Hide server settings in happ subscription (Only for Happ)",
+            "type": "boolean"
+          },
+          "subIncyEnableRouting": {
+            "description": "Enable routing injection for the Incy client",
+            "type": "boolean"
+          },
+          "subIncyRoutingRules": {
+            "description": "Incy routing deep-link injected into the subscription body (Only for Incy)",
+            "type": "string"
           },
           "subJsonEnable": {
             "description": "Enable JSON subscription endpoint",
@@ -331,6 +352,12 @@
             "description": "Telegram bot language",
             "type": "string"
           },
+          "tgMemory": {
+            "description": "Memory usage threshold for alerts (percent)",
+            "maximum": 100,
+            "minimum": 0,
+            "type": "integer"
+          },
           "tgRunTime": {
             "description": "Cron schedule for Telegram notifications",
             "type": "string"
@@ -405,6 +432,7 @@
           "ldapFlagField",
           "ldapHost",
           "ldapInboundTags",
+          "ldapInsecureSkipVerify",
           "ldapInvertFlag",
           "ldapPassword",
           "ldapPort",
@@ -424,6 +452,7 @@
           "smtpEnabledEvents",
           "smtpEncryptionType",
           "smtpHost",
+          "smtpMemory",
           "smtpPassword",
           "smtpPort",
           "smtpTo",
@@ -439,6 +468,9 @@
           "subEnable",
           "subEnableRouting",
           "subEncrypt",
+          "subHideSettings",
+          "subIncyEnableRouting",
+          "subIncyRoutingRules",
           "subJsonEnable",
           "subJsonFinalMask",
           "subJsonMux",
@@ -465,6 +497,7 @@
           "tgCpu",
           "tgEnabledEvents",
           "tgLang",
+          "tgMemory",
           "tgRunTime",
           "timeLocation",
           "trafficDiff",
@@ -560,6 +593,9 @@
           "ldapInboundTags": {
             "type": "string"
           },
+          "ldapInsecureSkipVerify": {
+            "type": "boolean"
+          },
           "ldapInvertFlag": {
             "type": "boolean"
           },
@@ -636,6 +672,12 @@
             "description": "SMTP server host",
             "type": "string"
           },
+          "smtpMemory": {
+            "description": "Memory threshold for email notifications",
+            "maximum": 100,
+            "minimum": 0,
+            "type": "integer"
+          },
           "smtpPassword": {
             "description": "SMTP password",
             "type": "string"
@@ -697,6 +739,18 @@
           "subEncrypt": {
             "description": "Encrypt subscription responses",
             "type": "boolean"
+          },
+          "subHideSettings": {
+            "description": "Hide server settings in happ subscription (Only for Happ)",
+            "type": "boolean"
+          },
+          "subIncyEnableRouting": {
+            "description": "Enable routing injection for the Incy client",
+            "type": "boolean"
+          },
+          "subIncyRoutingRules": {
+            "description": "Incy routing deep-link injected into the subscription body (Only for Incy)",
+            "type": "string"
           },
           "subJsonEnable": {
             "description": "Enable JSON subscription endpoint",
@@ -807,6 +861,12 @@
             "description": "Telegram bot language",
             "type": "string"
           },
+          "tgMemory": {
+            "description": "Memory usage threshold for alerts (percent)",
+            "maximum": 100,
+            "minimum": 0,
+            "type": "integer"
+          },
           "tgRunTime": {
             "description": "Cron schedule for Telegram notifications",
             "type": "string"
@@ -888,6 +948,7 @@
           "ldapFlagField",
           "ldapHost",
           "ldapInboundTags",
+          "ldapInsecureSkipVerify",
           "ldapInvertFlag",
           "ldapPassword",
           "ldapPort",
@@ -907,6 +968,7 @@
           "smtpEnabledEvents",
           "smtpEncryptionType",
           "smtpHost",
+          "smtpMemory",
           "smtpPassword",
           "smtpPort",
           "smtpTo",
@@ -922,6 +984,9 @@
           "subEnable",
           "subEnableRouting",
           "subEncrypt",
+          "subHideSettings",
+          "subIncyEnableRouting",
+          "subIncyRoutingRules",
           "subJsonEnable",
           "subJsonFinalMask",
           "subJsonMux",
@@ -948,6 +1013,7 @@
           "tgCpu",
           "tgEnabledEvents",
           "tgLang",
+          "tgMemory",
           "tgRunTime",
           "timeLocation",
           "trafficDiff",
@@ -1026,6 +1092,12 @@
       "Client": {
         "description": "Client represents a client configuration for Xray inbounds with traffic limits and settings.",
         "properties": {
+          "allowedIPs": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
           "auth": {
             "description": "Auth password (Hysteria)",
             "type": "string"
@@ -1062,12 +1134,24 @@
             "description": "Unique client identifier",
             "type": "string"
           },
+          "keepAlive": {
+            "type": "integer"
+          },
           "limitIp": {
             "description": "IP limit for this client",
             "type": "integer"
           },
           "password": {
             "description": "Client password",
+            "type": "string"
+          },
+          "preSharedKey": {
+            "type": "string"
+          },
+          "privateKey": {
+            "type": "string"
+          },
+          "publicKey": {
             "type": "string"
           },
           "reset": {
@@ -1143,6 +1227,9 @@
       },
       "ClientRecord": {
         "properties": {
+          "allowedIPs": {
+            "type": "string"
+          },
           "auth": {
             "type": "string"
           },
@@ -1170,10 +1257,22 @@
           "id": {
             "type": "integer"
           },
+          "keepAlive": {
+            "type": "integer"
+          },
           "limitIp": {
             "type": "integer"
           },
           "password": {
+            "type": "string"
+          },
+          "preSharedKey": {
+            "type": "string"
+          },
+          "privateKey": {
+            "type": "string"
+          },
+          "publicKey": {
             "type": "string"
           },
           "reset": {
@@ -1200,6 +1299,7 @@
           }
         },
         "required": [
+          "allowedIPs",
           "auth",
           "comment",
           "createdAt",
@@ -1209,8 +1309,12 @@
           "flow",
           "group",
           "id",
+          "keepAlive",
           "limitIp",
           "password",
+          "preSharedKey",
+          "privateKey",
+          "publicKey",
           "reset",
           "reverse",
           "security",
@@ -1464,10 +1568,11 @@
             "type": "integer"
           },
           "verifyPeerCertByName": {
-            "type": "boolean"
+            "type": "string"
           },
           "vlessRoute": {
-            "description": "VlessRoute is a free-form port/range routing spec (e.g. \"53,443,1000-2000\");\nstored verbatim, format-validated on the frontend.",
+            "description": "Single VLESS route value (0-65535) baked into the subscription UUID's 3rd\ngroup (bytes 6-7), which xray reads via net.PortFromBytes(id[6:8]). Empty = none.",
+            "example": "443",
             "type": "string"
           }
         },
@@ -1750,6 +1855,15 @@
           "tlsFlowCapable": {
             "example": true,
             "type": "boolean"
+          },
+          "wgDns": {
+            "type": "string"
+          },
+          "wgMtu": {
+            "type": "integer"
+          },
+          "wgPublicKey": {
+            "type": "string"
           }
         },
         "required": [
@@ -1788,6 +1902,10 @@
       "Node": {
         "description": "Node represents a remote 3x-ui panel registered with the central panel.\nThe central panel polls each node's existing /panel/api/server/status\nendpoint over HTTP using the per-node ApiToken to populate the runtime\nstatus fields below.",
         "properties": {
+          "activeCount": {
+            "example": 23,
+            "type": "integer"
+          },
           "address": {
             "example": "node1.example.com",
             "type": "string"
@@ -1823,6 +1941,10 @@
           },
           "depletedCount": {
             "example": 1,
+            "type": "integer"
+          },
+          "disabledCount": {
+            "example": 3,
             "type": "integer"
           },
           "enable": {
@@ -1955,6 +2077,7 @@
           }
         },
         "required": [
+          "activeCount",
           "address",
           "allowPrivateAddress",
           "apiToken",
@@ -1965,6 +2088,7 @@
           "cpuPct",
           "createdAt",
           "depletedCount",
+          "disabledCount",
           "enable",
           "guid",
           "id",
@@ -2075,6 +2199,104 @@
           "xrayError",
           "xrayState",
           "xrayVersion"
+        ],
+        "type": "object"
+      },
+      "RealityScanResult": {
+        "properties": {
+          "alpn": {
+            "example": "h2",
+            "type": "string"
+          },
+          "certIssuer": {
+            "example": "Google Trust Services",
+            "type": "string"
+          },
+          "certSubject": {
+            "example": "cloudflare.com",
+            "type": "string"
+          },
+          "certValid": {
+            "example": true,
+            "type": "boolean"
+          },
+          "curveID": {
+            "example": "X25519",
+            "type": "string"
+          },
+          "feasible": {
+            "example": true,
+            "type": "boolean"
+          },
+          "h2": {
+            "example": true,
+            "type": "boolean"
+          },
+          "host": {
+            "example": "www.cloudflare.com",
+            "type": "string"
+          },
+          "ip": {
+            "example": "104.16.124.96",
+            "type": "string"
+          },
+          "latencyMs": {
+            "example": 180,
+            "type": "integer"
+          },
+          "notAfter": {
+            "example": "2026-08-01T00:00:00Z",
+            "type": "string"
+          },
+          "port": {
+            "example": 443,
+            "type": "integer"
+          },
+          "reason": {
+            "type": "string"
+          },
+          "serverNames": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "target": {
+            "example": "www.cloudflare.com:443",
+            "type": "string"
+          },
+          "tls13": {
+            "example": true,
+            "type": "boolean"
+          },
+          "tlsVersion": {
+            "example": "1.3",
+            "type": "string"
+          },
+          "x25519": {
+            "example": true,
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "alpn",
+          "certIssuer",
+          "certSubject",
+          "certValid",
+          "curveID",
+          "feasible",
+          "h2",
+          "host",
+          "ip",
+          "latencyMs",
+          "notAfter",
+          "port",
+          "reason",
+          "serverNames",
+          "target",
+          "tls13",
+          "tlsVersion",
+          "x25519"
         ],
         "type": "object"
       },
@@ -2539,8 +2761,48 @@
                       "remark": "VLESS-443",
                       "ssMethod": "",
                       "tag": "in-443-tcp",
-                      "tlsFlowCapable": true
+                      "tlsFlowCapable": true,
+                      "wgDns": "",
+                      "wgMtu": 0,
+                      "wgPublicKey": ""
                     }
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/panel/api/inbounds/allLinks": {
+      "get": {
+        "tags": [
+          "Inbounds"
+        ],
+        "summary": "Return every protocol URL (vless://, vmess://, trojan://, ss://, hysteria://, mtproto) across all inbounds and all of their clients. Links are rendered through the subscription engine, so the configured remark template (name-only display part) is applied per client — the same output the client info/QR pages use. Protocols without a URL form (socks, http, mixed, wireguard, dokodemo, tunnel) contribute nothing. Used by the panel’s \"Export all inbound links\" action.",
+        "operationId": "get_panel_api_inbounds_allLinks",
+        "responses": {
+          "200": {
+            "description": "Successful response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean"
+                    },
+                    "msg": {
+                      "type": "string"
+                    },
+                    "obj": {}
+                  }
+                },
+                "example": {
+                  "success": true,
+                  "obj": [
+                    "vless://uuid@host:443?security=reality&...#Germany-alice",
+                    "vmess://eyJ2IjoyLC..."
                   ]
                 }
               }
@@ -3260,6 +3522,45 @@
                       "load5": 0.3,
                       "load15": 0.2
                     }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/panel/api/server/fail2banStatus": {
+      "get": {
+        "tags": [
+          "Server"
+        ],
+        "summary": "Reports whether per-client IP limits can be enforced on this host. The panel uses it to gate the \"IP Limit\" field, since enforcement depends on Fail2ban being installed.",
+        "operationId": "get_panel_api_server_fail2banStatus",
+        "responses": {
+          "200": {
+            "description": "Successful response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean"
+                    },
+                    "msg": {
+                      "type": "string"
+                    },
+                    "obj": {}
+                  }
+                },
+                "example": {
+                  "success": true,
+                  "obj": {
+                    "enabled": true,
+                    "installed": true,
+                    "usable": true,
+                    "windows": false
                   }
                 }
               }
@@ -4133,6 +4434,46 @@
         }
       }
     },
+    "/panel/api/server/setUpdateChannel": {
+      "post": {
+        "tags": [
+          "Server"
+        ],
+        "summary": "Toggle the panel update channel between stable and the rolling per-commit dev release. Only effective on dev builds.",
+        "operationId": "post_panel_api_server_setUpdateChannel",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean"
+                    },
+                    "msg": {
+                      "type": "string"
+                    },
+                    "obj": {}
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/panel/api/server/updateGeofile": {
       "post": {
         "tags": [
@@ -4391,6 +4732,237 @@
                     },
                     "obj": {}
                   }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/panel/api/server/getCertHash": {
+      "post": {
+        "tags": [
+          "Server"
+        ],
+        "summary": "Compute the hex SHA-256 of a certificate (DER) for pinning (pinnedPeerCertSha256). Provide either a server file path or inline PEM/DER content.",
+        "operationId": "post_panel_api_server_getCertHash",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean"
+                    },
+                    "msg": {
+                      "type": "string"
+                    },
+                    "obj": {}
+                  }
+                },
+                "example": {
+                  "success": true,
+                  "obj": [
+                    "e8e2d3..."
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/panel/api/server/getRemoteCertHash": {
+      "post": {
+        "tags": [
+          "Server"
+        ],
+        "summary": "Run `xray tls ping` against a remote server and return its live leaf-certificate SHA-256 hash(es) for pinning (pinnedPeerCertSha256).",
+        "operationId": "post_panel_api_server_getRemoteCertHash",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean"
+                    },
+                    "msg": {
+                      "type": "string"
+                    },
+                    "obj": {}
+                  }
+                },
+                "example": {
+                  "success": true,
+                  "obj": [
+                    "e8e2d3..."
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/panel/api/server/scanRealityTarget": {
+      "post": {
+        "tags": [
+          "Server"
+        ],
+        "summary": "Run a live TLS 1.3 probe against a candidate REALITY target and return a feasibility verdict (TLS 1.3 + h2 + X25519 + trusted certificate) plus the certificate SAN DNS names.",
+        "operationId": "post_panel_api_server_scanRealityTarget",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean"
+                    },
+                    "msg": {
+                      "type": "string"
+                    },
+                    "obj": {
+                      "$ref": "#/components/schemas/RealityScanResult"
+                    }
+                  }
+                },
+                "example": {
+                  "success": true,
+                  "obj": {
+                    "alpn": "h2",
+                    "certIssuer": "Google Trust Services",
+                    "certSubject": "cloudflare.com",
+                    "certValid": true,
+                    "curveID": "X25519",
+                    "feasible": true,
+                    "h2": true,
+                    "host": "www.cloudflare.com",
+                    "ip": "104.16.124.96",
+                    "latencyMs": 180,
+                    "notAfter": "2026-08-01T00:00:00Z",
+                    "port": 443,
+                    "reason": "",
+                    "serverNames": [
+                      ""
+                    ],
+                    "target": "www.cloudflare.com:443",
+                    "tls13": true,
+                    "tlsVersion": "1.3",
+                    "x25519": true
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/panel/api/server/scanRealityTargets": {
+      "post": {
+        "tags": [
+          "Server"
+        ],
+        "summary": "Probe/discover REALITY targets and return each verdict ranked by feasibility then latency. Each comma-separated token may be a domain (validated with SNI), a bare IP, or a CIDR range (discovered without SNI by reading the certificate domain). When empty, a built-in seed list is probed.",
+        "operationId": "post_panel_api_server_scanRealityTargets",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean"
+                    },
+                    "msg": {
+                      "type": "string"
+                    },
+                    "obj": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/RealityScanResult"
+                      }
+                    }
+                  }
+                },
+                "example": {
+                  "success": true,
+                  "obj": [
+                    {
+                      "alpn": "h2",
+                      "certIssuer": "Google Trust Services",
+                      "certSubject": "cloudflare.com",
+                      "certValid": true,
+                      "curveID": "X25519",
+                      "feasible": true,
+                      "h2": true,
+                      "host": "www.cloudflare.com",
+                      "ip": "104.16.124.96",
+                      "latencyMs": 180,
+                      "notAfter": "2026-08-01T00:00:00Z",
+                      "port": 443,
+                      "reason": "",
+                      "serverNames": [
+                        ""
+                      ],
+                      "target": "www.cloudflare.com:443",
+                      "tls13": true,
+                      "tlsVersion": "1.3",
+                      "x25519": true
+                    }
+                  ]
                 }
               }
             }
@@ -5132,12 +5704,152 @@
         }
       }
     },
+    "/panel/api/clients/delOrphans": {
+      "post": {
+        "tags": [
+          "Clients"
+        ],
+        "summary": "Delete every client that is not attached to any inbound, along with its traffic record, IP log, and external links. Useful for clearing clients left unattached after their inbounds were removed. Returns the deleted count. Cannot be undone.",
+        "operationId": "post_panel_api_clients_delOrphans",
+        "responses": {
+          "200": {
+            "description": "Successful response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean"
+                    },
+                    "msg": {
+                      "type": "string"
+                    },
+                    "obj": {}
+                  }
+                },
+                "example": {
+                  "success": true,
+                  "obj": {
+                    "deleted": 0
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/panel/api/clients/export": {
+      "get": {
+        "tags": [
+          "Clients"
+        ],
+        "summary": "Return every client as a {client, inboundIds} array — the same shape /bulkCreate and /import accept — so the payload round-trips straight back through /import. Clients with no inbound attachment are included with an empty inboundIds list. The UI shows this in a CodeMirror viewer (copy / download); programmatic callers get the array in obj.",
+        "operationId": "get_panel_api_clients_export",
+        "responses": {
+          "200": {
+            "description": "Successful response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean"
+                    },
+                    "msg": {
+                      "type": "string"
+                    },
+                    "obj": {}
+                  }
+                },
+                "example": {
+                  "success": true,
+                  "obj": [
+                    {
+                      "client": {
+                        "email": "alice@example.com",
+                        "id": "...",
+                        "totalGB": 53687091200,
+                        "expiryTime": 0,
+                        "enable": true,
+                        "subId": "..."
+                      },
+                      "inboundIds": [
+                        7,
+                        9
+                      ]
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/panel/api/clients/import": {
+      "post": {
+        "tags": [
+          "Clients"
+        ],
+        "summary": "Import clients from a JSON body { \"data\": \"<json>\" }, where data is a string-encoded array produced by /export ([{client, inboundIds}]). Items with inboundIds are created and attached to those inbounds; items with an empty inboundIds list are restored as unattached client records. Existing emails are never overwritten — they are returned in skipped. Triggers a single Xray restart at the end if any target inbound was running.",
+        "operationId": "post_panel_api_clients_import",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              },
+              "example": {
+                "data": "[{\"client\":{\"email\":\"alice@example.com\",\"enable\":true},\"inboundIds\":[7]}]"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean"
+                    },
+                    "msg": {
+                      "type": "string"
+                    },
+                    "obj": {}
+                  }
+                },
+                "example": {
+                  "success": true,
+                  "obj": {
+                    "created": 2,
+                    "skipped": [
+                      {
+                        "email": "alice@example.com",
+                        "reason": "email already in use: alice@example.com"
+                      }
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/panel/api/clients/bulkAdjust": {
       "post": {
         "tags": [
           "Clients"
         ],
-        "summary": "Shift expiry and/or traffic quota for many clients in one call. addDays/addBytes may be negative. Clients with unlimited expiry (expiryTime=0) or unlimited traffic (totalGB=0) are skipped for the corresponding field — bulk extend never converts unlimited to limited. Returns the adjusted count and per-email skip reasons.",
+        "summary": "Shift expiry and/or traffic quota for many clients in one call. addDays/addBytes may be negative. Clients with unlimited expiry (expiryTime=0) or unlimited traffic (totalGB=0) are skipped for the corresponding field — bulk extend never converts unlimited to limited. A client that was auto-disabled solely because it was depleted (expired or over quota) is automatically re-enabled — locally and on its node — when the adjustment lifts it out of depletion; a manually-disabled or still-depleted client is left disabled. The optional flow directive sets the XTLS flow on every client: \"none\" clears it, \"xtls-rprx-vision\"/\"xtls-rprx-vision-udp443\" set it where the inbound supports it (omit or \"\" to leave it unchanged). Returns the adjusted count and per-email skip reasons.",
         "operationId": "post_panel_api_clients_bulkAdjust",
         "requestBody": {
           "required": true,
@@ -5152,7 +5864,8 @@
                   "bob"
                 ],
                 "addDays": 30,
-                "addBytes": 53687091200
+                "addBytes": 53687091200,
+                "flow": "xtls-rprx-vision"
               }
             }
           }
@@ -5182,6 +5895,122 @@
                       {
                         "email": "carol",
                         "reason": "unlimited expiry"
+                      }
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/panel/api/clients/bulkEnable": {
+      "post": {
+        "tags": [
+          "Clients"
+        ],
+        "summary": "Enable many clients in one call. Emails are grouped by inbound and applied with a single read-modify-write per inbound; the running Xray (local or remote node) is updated to add each user. Note that enabling a client whose quota is exhausted or whose expiry has passed only flips the flag — the traffic loop will disable it again on the next tick. Returns the changed count and per-email skip reasons.",
+        "operationId": "post_panel_api_clients_bulkEnable",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              },
+              "example": {
+                "emails": [
+                  "alice",
+                  "bob"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean"
+                    },
+                    "msg": {
+                      "type": "string"
+                    },
+                    "obj": {}
+                  }
+                },
+                "example": {
+                  "success": true,
+                  "obj": {
+                    "changed": 2,
+                    "skipped": [
+                      {
+                        "email": "carol",
+                        "reason": "client not found"
+                      }
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/panel/api/clients/bulkDisable": {
+      "post": {
+        "tags": [
+          "Clients"
+        ],
+        "summary": "Disable many clients in one call. Emails are grouped by inbound and applied with a single read-modify-write per inbound; the running Xray (local or remote node) is updated to remove each user. Returns the changed count and per-email skip reasons.",
+        "operationId": "post_panel_api_clients_bulkDisable",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              },
+              "example": {
+                "emails": [
+                  "alice",
+                  "bob"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean"
+                    },
+                    "msg": {
+                      "type": "string"
+                    },
+                    "obj": {}
+                  }
+                },
+                "example": {
+                  "success": true,
+                  "obj": {
+                    "changed": 2,
+                    "skipped": [
+                      {
+                        "email": "carol",
+                        "reason": "client not found"
                       }
                     ]
                   }
@@ -5849,6 +6678,55 @@
         }
       }
     },
+    "/panel/api/clients/groups/resetTraffic": {
+      "post": {
+        "tags": [
+          "Clients"
+        ],
+        "summary": "Reset only the group-level traffic counter shown on the groups page. Snapshots the current up/down sum of the group's members as a baseline so the group total reads zero, while leaving each client's own counters (and their quotas) untouched. No Xray restart is triggered. Creates the client_groups row if the group exists only as a derived label.",
+        "operationId": "post_panel_api_clients_groups_resetTraffic",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              },
+              "example": {
+                "name": "customer-a"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean"
+                    },
+                    "msg": {
+                      "type": "string"
+                    },
+                    "obj": {}
+                  }
+                },
+                "example": {
+                  "success": true,
+                  "obj": {
+                    "name": "customer-a"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/panel/api/clients/resetTraffic/{email}": {
       "post": {
         "tags": [
@@ -6413,6 +7291,7 @@
                   "success": true,
                   "obj": [
                     {
+                      "activeCount": 23,
                       "address": "node1.example.com",
                       "allowPrivateAddress": false,
                       "apiToken": "abcdef0123456789",
@@ -6423,6 +7302,7 @@
                       "cpuPct": 23.5,
                       "createdAt": 1700000000,
                       "depletedCount": 1,
+                      "disabledCount": 3,
                       "enable": true,
                       "guid": "",
                       "id": 1,
@@ -7058,7 +7938,7 @@
         "tags": [
           "Nodes"
         ],
-        "summary": "Trigger the official panel self-updater on each given node (downloads the latest release and restarts). Only enabled, online nodes are updated; offline/disabled ones are reported as skipped. Returns a per-node result list.",
+        "summary": "Trigger the official panel self-updater on each given node (downloads the latest release and restarts). Only enabled, online nodes are updated; offline/disabled ones are reported as skipped. Set \"dev\": true to move the nodes to the rolling per-commit dev channel instead of the latest stable release. Returns a per-node result list.",
         "operationId": "post_panel_api_nodes_updatePanel",
         "requestBody": {
           "required": true,
@@ -7072,7 +7952,8 @@
                   1,
                   2,
                   3
-                ]
+                ],
+                "dev": false
               }
             }
           }
@@ -7249,8 +8130,8 @@
                         ""
                       ],
                       "updatedAt": 0,
-                      "verifyPeerCertByName": false,
-                      "vlessRoute": ""
+                      "verifyPeerCertByName": "",
+                      "vlessRoute": "443"
                     }
                   ]
                 }
@@ -7341,8 +8222,8 @@
                       ""
                     ],
                     "updatedAt": 0,
-                    "verifyPeerCertByName": false,
-                    "vlessRoute": ""
+                    "verifyPeerCertByName": "",
+                    "vlessRoute": "443"
                   }
                 }
               }
@@ -7436,8 +8317,8 @@
                         ""
                       ],
                       "updatedAt": 0,
-                      "verifyPeerCertByName": false,
-                      "vlessRoute": ""
+                      "verifyPeerCertByName": "",
+                      "vlessRoute": "443"
                     }
                   ]
                 }
@@ -7576,8 +8457,8 @@
                       ""
                     ],
                     "updatedAt": 0,
-                    "verifyPeerCertByName": false,
-                    "vlessRoute": ""
+                    "verifyPeerCertByName": "",
+                    "vlessRoute": "443"
                   }
                 }
               }
@@ -7688,8 +8569,8 @@
                       ""
                     ],
                     "updatedAt": 0,
-                    "verifyPeerCertByName": false,
-                    "vlessRoute": ""
+                    "verifyPeerCertByName": "",
+                    "vlessRoute": "443"
                   }
                 }
               }

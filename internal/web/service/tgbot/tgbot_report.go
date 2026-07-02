@@ -10,7 +10,6 @@ import (
 	"time"
 
 	"github.com/mhsanaei/3x-ui/v3/internal/config"
-	"github.com/mhsanaei/3x-ui/v3/internal/database"
 	"github.com/mhsanaei/3x-ui/v3/internal/database/model"
 	"github.com/mhsanaei/3x-ui/v3/internal/eventbus"
 	"github.com/mhsanaei/3x-ui/v3/internal/logger"
@@ -50,7 +49,7 @@ func (t *Tgbot) SendBackupToAdmins() {
 		return
 	}
 	for i, adminId := range adminIds {
-		t.sendBackup(int64(adminId))
+		t.sendBackup(adminId)
 		// Add delay between sends to avoid Telegram rate limits
 		if i < len(adminIds)-1 {
 			time.Sleep(1 * time.Second)
@@ -64,7 +63,7 @@ func (t *Tgbot) sendExhaustedToAdmins() {
 		return
 	}
 	for _, adminId := range adminIds {
-		t.getExhausted(int64(adminId))
+		t.getExhausted(adminId)
 	}
 }
 
@@ -109,7 +108,7 @@ func (t *Tgbot) prepareServerUsageInfo() string {
 	onlines := service.XrayProcess().GetOnlineClients()
 
 	info += t.I18nBot("tgbot.messages.hostname", "Hostname=="+hostname)
-	info += t.I18nBot("tgbot.messages.version", "Version=="+config.GetVersion())
+	info += t.I18nBot("tgbot.messages.version", "Version=="+config.GetPanelVersion())
 	info += t.I18nBot("tgbot.messages.xrayVersion", "XrayVersion=="+fmt.Sprint(t.lastStatus.Xray.Version))
 
 	// get ip address
@@ -206,6 +205,7 @@ func (t *Tgbot) getExhausted(chatId int64) {
 		logger.Warning("Unable to load Inbounds", err)
 	}
 
+	seenClients := make(map[string]bool)
 	for _, inbound := range inbounds {
 		if inbound.Enable {
 			if (inbound.ExpiryTime > 0 && (inbound.ExpiryTime-now < exDiff)) ||
@@ -214,6 +214,10 @@ func (t *Tgbot) getExhausted(chatId int64) {
 			}
 			if len(inbound.ClientStats) > 0 {
 				for _, client := range inbound.ClientStats {
+					if seenClients[client.Email] {
+						continue
+					}
+					seenClients[client.Email] = true
 					if client.Enable {
 						if (client.ExpiryTime > 0 && (client.ExpiryTime-now < exDiff)) ||
 							(client.Total > 0 && (client.Total-(client.Up+client.Down) < trDiff)) {
@@ -398,10 +402,7 @@ func (t *Tgbot) sendBackup(chatId int64) {
 	// Send database backup (SQLite file, or a pg_dump archive on PostgreSQL)
 	dbData, err := t.serverService.GetDb()
 	if err == nil {
-		dbFilename := "x-ui.db"
-		if database.IsPostgres() {
-			dbFilename = "x-ui.dump"
-		}
+		dbFilename := t.serverService.BackupFilename("")
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		document := tu.Document(
 			tu.ID(chatId),

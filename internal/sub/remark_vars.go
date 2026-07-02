@@ -1,11 +1,11 @@
 package sub
 
 import (
+	"fmt"
 	"regexp"
 	"strconv"
 	"strings"
 	"time"
-	"unicode"
 
 	"github.com/mhsanaei/3x-ui/v3/internal/database/model"
 	"github.com/mhsanaei/3x-ui/v3/internal/util/common"
@@ -15,21 +15,21 @@ import (
 // remarkContext carries the per-client data a remark template can interpolate.
 // stats holds the live traffic record when one exists; when it doesn't, the
 // caller synthesizes a minimal one from the client so expiry/total/status tokens
-// still resolve. hostRemark is the host endpoint's own remark: it takes priority
-// over the inbound's remark as the config name and backs the {{HOST}} token.
+// still resolve. hostRemark is the host endpoint's own remark; it backs the
+// {{HOST}} token only — it never substitutes the inbound's remark as the config
+// name (use {{INBOUND}} and {{HOST}} side by side to show both).
 type remarkContext struct {
 	client     model.Client
 	stats      xray.ClientTraffic
 	inbound    *model.Inbound
 	hostRemark string
+	transport  string
+	security   string
 }
 
-// configName is the display name for a link: the host endpoint's own remark when
-// it has one, otherwise the inbound's remark.
+// configName is the display name for a link: always the inbound's own remark.
+// The host endpoint's remark is surfaced only through the {{HOST}} token.
 func (ctx remarkContext) configName() string {
-	if ctx.hostRemark != "" {
-		return ctx.hostRemark
-	}
 	if ctx.inbound != nil {
 		return ctx.inbound.Remark
 	}
@@ -52,6 +52,55 @@ var unlimitedDropTokens = map[string]bool{
 	"TRAFFIC_LEFT":  true,
 	"TRAFFIC_TOTAL": true,
 	"DAYS_LEFT":     true,
+	"TIME_LEFT":     true,
+}
+
+// uiTokenMap translates user-friendly single-brace tokens (used in the frontend
+// Remark/Host Name fields) to their internal double-brace equivalents. Tokens
+// not present in this map are left untouched.
+var uiTokenMap = map[string]string{
+	"EMAIL":              "EMAIL",
+	"DATA_USAGE":         "TRAFFIC_USED",
+	"DATA_LEFT":          "TRAFFIC_LEFT",
+	"DATA_LIMIT":         "TRAFFIC_TOTAL",
+	"DAYS_LEFT":          "DAYS_LEFT",
+	"EXPIRE_DATE":        "EXPIRE_DATE",
+	"JALALI_EXPIRE_DATE": "JALALI_EXPIRE_DATE",
+	"TIME_LEFT":          "TIME_LEFT",
+	"STATUS_EMOJI":       "STATUS_EMOJI",
+	"USAGE_PERCENTAGE":   "USAGE_PERCENTAGE",
+	"PROTOCOL":           "PROTOCOL",
+	"TRANSPORT":          "TRANSPORT",
+	"SECURITY":           "SECURITY",
+}
+
+// translateUISingleBrackets converts user-friendly single-brace tokens to the
+// internal double-brace format before regex expansion. Only {TOKEN} patterns
+// that are NOT part of {{TOKEN}} are translated. Unknown tokens stay as-is.
+func translateUISingleBrackets(template string) string {
+	var result strings.Builder
+	i := 0
+	for i < len(template) {
+		if template[i] == '{' && (i == 0 || template[i-1] != '{') {
+			j := i + 1
+			for j < len(template) && template[j] != '}' {
+				j++
+			}
+			if j < len(template) && template[j] == '}' {
+				token := template[i+1 : j]
+				if internal, ok := uiTokenMap[token]; ok {
+					result.WriteString("{{")
+					result.WriteString(internal)
+					result.WriteString("}}")
+					i = j + 1
+					continue
+				}
+			}
+		}
+		result.WriteByte(template[i])
+		i++
+	}
+	return result.String()
 }
 
 // expandRemarkVars substitutes every {{TOKEN}} in template with its per-client
@@ -60,6 +109,7 @@ var unlimitedDropTokens = map[string]bool{
 // or expiry (∞) drops out whole — decoration and separator included — so an
 // unlimited client gets "host" instead of "host|📊∞|⏳∞D".
 func expandRemarkVars(template string, ctx remarkContext) string {
+	template = translateUISingleBrackets(template)
 	if !strings.Contains(template, "{{") {
 		return template
 	}
@@ -166,6 +216,23 @@ func remarkVarValue(token string, ctx remarkContext) string {
 			return strconv.Itoa(c.Reset)
 		}
 		return ""
+	case "STATUS_EMOJI":
+		return statusEmoji(st)
+	case "USAGE_PERCENTAGE":
+		return usagePercentage(st)
+	case "PROTOCOL":
+		if ctx.inbound != nil {
+			return strings.ToUpper(string(ctx.inbound.Protocol))
+		}
+		return ""
+	case "TRANSPORT":
+		return ctx.transport
+	case "SECURITY":
+		return strings.ToUpper(ctx.security)
+	case "TIME_LEFT":
+		return timeLeftLabel(st.ExpiryTime)
+	case "JALALI_EXPIRE_DATE":
+		return jalaliExpireDateLabel(st.ExpiryTime)
 	}
 	return ""
 }
@@ -204,13 +271,13 @@ func daysLeftLabel(expiryMs int64) string {
 	return strconv.FormatInt(days, 10)
 }
 
-// expireDateLabel renders a fixed expiry as YYYY-MM-DD (UTC). Unlimited and
-// delayed-start (no fixed calendar date yet) expiries yield "".
+// expireDateLabel renders a fixed expiry as YYYY-MM-DD (local time). Unlimited
+// and delayed-start (no fixed calendar date yet) expiries yield "".
 func expireDateLabel(expiryMs int64) string {
 	if expiryMs <= 0 {
 		return ""
 	}
-	return time.Unix(expiryMs/1000, 0).UTC().Format("2006-01-02")
+	return time.Unix(expiryMs/1000, 0).In(time.Local).Format("2006-01-02")
 }
 
 func max64(a, b int64) int64 {
@@ -220,11 +287,165 @@ func max64(a, b int64) int64 {
 	return b
 }
 
+// statusEmoji maps clientStatus to a single emoji character.
+func statusEmoji(st xray.ClientTraffic) string {
+	switch clientStatus(st) {
+	case "active":
+		return "✅"
+	case "expired":
+		return "⏳"
+	case "depleted":
+		return "🚫"
+	case "disabled":
+		return "🚫"
+	default:
+		return ""
+	}
+}
+
+// usagePercentage computes the traffic usage as a percentage string (e.g. "52.3%").
+// Returns "" when the client has no traffic limit.
+func usagePercentage(st xray.ClientTraffic) string {
+	if st.Total <= 0 {
+		return ""
+	}
+	used := st.Up + st.Down
+	pct := float64(used) / float64(st.Total) * 100
+	if pct > 100 {
+		pct = 100 // clamp over-quota usage, consistent with TRAFFIC_LEFT
+	}
+	return fmt.Sprintf("%.1f%%", pct)
+}
+
+// timeLeftLabel renders remaining time as "Xd Xh Xm" (or shorter when days/hours
+// are zero). Returns "∞" for unlimited and "0" when past expiry.
+func timeLeftLabel(expiryMs int64) string {
+	if expiryMs == 0 {
+		return unlimitedMark
+	}
+	exp := expiryMs / 1000
+	var secs int64
+	if exp > 0 {
+		secs = exp - time.Now().Unix()
+	} else {
+		secs = -exp
+	}
+	if secs <= 0 {
+		return "0"
+	}
+	days := secs / 86400
+	hours := (secs % 86400) / 3600
+	mins := (secs % 3600) / 60
+	if days > 0 {
+		return fmt.Sprintf("%dd %dh %dm", days, hours, mins)
+	}
+	if hours > 0 {
+		return fmt.Sprintf("%dh %dm", hours, mins)
+	}
+	return fmt.Sprintf("%dm", mins)
+}
+
+// jalaliExpireDateLabel converts a Gregorian expiry timestamp to Jalali
+// (Persian/Solar Hijri) date format "YYYY/MM/DD". Returns "" for unlimited
+// or delayed-start expiries.
+func jalaliExpireDateLabel(expiryMs int64) string {
+	if expiryMs <= 0 {
+		return ""
+	}
+	t := time.Unix(expiryMs/1000, 0).In(time.Local)
+	y, m, d := gregorianToJalali(t.Year(), int(t.Month()), t.Day())
+	return fmt.Sprintf("%d/%02d/%02d", y, m, d)
+}
+
+// gregorianToJalali converts a Gregorian date to Jalali (Solar Hijri) date.
+// Uses a reference-date approach: counts days from a known reference point
+// (2024-01-01 = 1402-10-11 JAL) and walks the Jalali calendar forward/backward.
+func gregorianToJalali(gy, gm, gd int) (jy, jm, jd int) {
+	// Compute Julian Day Number for the input Gregorian date
+	a := (14 - gm) / 12
+	y := gy + 4800 - a
+	m := gm + 12*a - 3
+	jdn := gd + (153*m+2)/5 + 365*y + y/4 - y/100 + y/400 - 32045
+
+	// Reference: 2024-01-01 = JDN 2460311 = 1402-10-11 JAL
+	refJDN := 2460311
+	days := int64(jdn - refJDN)
+	jy, jm, jd = 1402, 10, 11
+
+	// Walk forward
+	for days > 0 {
+		remaining := int64(jalaliMonthDays(jy, jm) - jd + 1)
+		if days < remaining {
+			jd += int(days)
+			return
+		}
+		days -= remaining
+		jm++
+		if jm > 12 {
+			jm = 1
+			jy++
+		}
+		jd = 1
+	}
+	// Walk backward
+	for days < 0 {
+		jd += int(days)
+		for jd < 1 {
+			jm--
+			if jm < 1 {
+				jm = 12
+				jy--
+			}
+			jd += jalaliMonthDays(jy, jm)
+		}
+		days = 0
+	}
+	return
+}
+
+func jalaliMonthDays(y, m int) int {
+	if m <= 6 {
+		return 31
+	}
+	if m <= 11 {
+		return 30
+	}
+	if isJalaliLeap(y) {
+		return 30
+	}
+	return 29
+}
+
+// isJalaliLeap reports whether the given Jalali year is a leap year.
+// The leap pattern repeats every 33 years with 8 leap years.
+func isJalaliLeap(y int) bool {
+	switch y % 33 {
+	case 1, 5, 9, 13, 17, 22, 26, 30:
+		return true
+	}
+	return false
+}
+
 // statsForClient returns the client's live traffic record, or a minimal one
 // synthesized from the client (enable/expiry/total) when no live stats exist —
 // so expiry/total/status tokens still resolve on links that have no counters yet.
 func (s *SubService) statsForClient(inbound *model.Inbound, client model.Client) xray.ClientTraffic {
 	if stats, ok := s.findClientStats(inbound, client.Email); ok {
+		return stats
+	}
+	// client_traffics.email is globally unique, so a client shared across several
+	// inbounds of one subscription has a single traffic row owned by exactly one
+	// inbound. On every other inbound's link findClientStats misses; fall back to
+	// the per-request map built from all the subscription's inbounds so
+	// {{TRAFFIC_*}} reflect real usage instead of the full quota (#5443).
+	if stats, ok := s.statsByEmail[client.Email]; ok {
+		return stats
+	}
+	// Both in-memory paths key off client_traffics.inbound_id, which goes stale
+	// when an inbound is deleted and recreated, orphaning the row from every
+	// loaded inbound. Fall back to a direct lookup by the globally-unique email
+	// so usage still resolves for clients predating that recreation (#5567).
+	if stats, ok := s.statsByEmailFromDB(client.Email); ok {
 		return stats
 	}
 	return xray.ClientTraffic{
@@ -247,76 +468,147 @@ func (s *SubService) lookupClient(inbound *model.Inbound, email string) model.Cl
 	return model.Client{Email: email}
 }
 
-// usageInfoTokens are the per-client status tokens. On every link of a
-// subscription except the client's first, these (and the decoration leading
-// into them) are dropped, so the traffic/expiry info shows once instead of on
-// every server.
-var usageInfoTokens = []string{
-	"TRAFFIC_USED", "TRAFFIC_LEFT", "TRAFFIC_TOTAL",
-	"TRAFFIC_USED_BYTES", "TRAFFIC_LEFT_BYTES", "TRAFFIC_TOTAL_BYTES",
-	"UP", "DOWN", "DAYS_LEFT", "EXPIRE_DATE", "EXPIRE_UNIX", "STATUS",
+var usageInfoTokens = map[string]bool{
+	"TRAFFIC_USED": true, "TRAFFIC_LEFT": true, "TRAFFIC_TOTAL": true,
+	"TRAFFIC_USED_BYTES": true, "TRAFFIC_LEFT_BYTES": true, "TRAFFIC_TOTAL_BYTES": true,
+	"UP": true, "DOWN": true, "DAYS_LEFT": true, "EXPIRE_DATE": true, "EXPIRE_UNIX": true,
+	"STATUS": true, "STATUS_EMOJI": true, "USAGE_PERCENTAGE": true, "TIME_LEFT": true,
+	"JALALI_EXPIRE_DATE": true,
 }
 
-// nameOnlyTemplate returns template with the trailing per-client info part
-// removed: everything from the first usage token (and the decoration — emojis,
-// spaces, separators — leading into it) onward is dropped, leaving the config
-// name. Returns "" when the template is info-only.
-func nameOnlyTemplate(template string) string {
-	idx := -1
-	for _, tok := range usageInfoTokens {
-		if i := strings.Index(template, "{{"+tok+"}}"); i >= 0 && (idx < 0 || i < idx) {
-			idx = i
+var connectionTokens = map[string]bool{
+	"PROTOCOL":  true,
+	"TRANSPORT": true,
+	"SECURITY":  true,
+}
+
+var displayRemoveTokens = mergeTokenSets(usageInfoTokens, connectionTokens)
+
+// firstLinkOnlyBodyTokens are stripped from every subscription-body link after a
+// client's first one: the usage/info tokens plus the per-client EMAIL/USERNAME
+// identity. A client app needs the email once, so repeating it on every link of
+// the same subscription is noise — show it on the first link only, like traffic.
+var firstLinkOnlyBodyTokens = mergeTokenSets(usageInfoTokens, map[string]bool{
+	"EMAIL":    true,
+	"USERNAME": true,
+})
+
+func mergeTokenSets(sets ...map[string]bool) map[string]bool {
+	out := make(map[string]bool)
+	for _, set := range sets {
+		for tok := range set {
+			out[tok] = true
 		}
 	}
-	if idx < 0 {
-		return template
-	}
-	return strings.TrimRightFunc(template[:idx], func(r rune) bool {
-		return r != '}' && !unicode.IsLetter(r) && !unicode.IsDigit(r)
-	})
+	return out
 }
 
-// effectiveTemplate picks which template to expand for one body link: the full
-// template (with the per-client info) for a client's first link, and the
-// name-only template for every link thereafter — so the info shows once. Only
-// called in the subscription-body context (displays bypass the template).
+func filterRemarkTemplate(template string, remove map[string]bool) string {
+	segments := strings.Split(template, "|")
+	kept := make([]string, 0, len(segments))
+	for _, seg := range segments {
+		if out := filterRemarkSegment(seg, remove); out != "" {
+			kept = append(kept, out)
+		}
+	}
+	return strings.Join(kept, "|")
+}
+
+func filterRemarkSegment(seg string, remove map[string]bool) string {
+	locs := remarkVarRe.FindAllStringSubmatchIndex(seg, -1)
+	hasRemove := false
+	for _, loc := range locs {
+		if remove[seg[loc[2]:loc[3]]] {
+			hasRemove = true
+			break
+		}
+	}
+	if !hasRemove {
+		return strings.TrimSpace(seg)
+	}
+	runs := make([]string, 0, 2)
+	runStart, leftRemoved := 0, false
+	for _, loc := range locs {
+		if !remove[seg[loc[2]:loc[3]]] {
+			continue
+		}
+		runs = appendKeptRun(runs, seg[runStart:loc[0]], leftRemoved, true)
+		runStart, leftRemoved = loc[1], true
+	}
+	runs = appendKeptRun(runs, seg[runStart:], leftRemoved, false)
+	return strings.Join(runs, " ")
+}
+
+func appendKeptRun(runs []string, run string, leftRemoved, rightRemoved bool) []string {
+	locs := remarkVarRe.FindAllStringSubmatchIndex(run, -1)
+	if len(locs) == 0 {
+		return runs
+	}
+	start, end := 0, len(run)
+	if leftRemoved {
+		start = locs[0][0]
+	}
+	if rightRemoved {
+		end = locs[len(locs)-1][1]
+	}
+	if frag := strings.TrimSpace(run[start:end]); frag != "" {
+		runs = append(runs, frag)
+	}
+	return runs
+}
+
 func (s *SubService) effectiveTemplate(email string) string {
+	translated := translateUISingleBrackets(s.remarkTemplate)
 	if s.usageShown == nil {
 		s.usageShown = map[string]bool{}
 	}
 	if s.usageShown[email] {
-		return nameOnlyTemplate(s.remarkTemplate)
+		return filterRemarkTemplate(translated, firstLinkOnlyBodyTokens)
 	}
 	s.usageShown[email] = true
-	return s.remarkTemplate
+	return translated
+}
+
+func inboundSecurity(inbound *model.Inbound) string {
+	if inbound == nil {
+		return ""
+	}
+	stream := unmarshalStreamSettings(inbound.StreamSettings)
+	security, _ := stream["security"].(string)
+	return security
 }
 
 // genTemplatedRemark expands the remark template for one client. hostRemark is
-// the host endpoint's remark (empty for a plain inbound); it takes priority over
-// the inbound remark for the config name and backs the {{HOST}} token.
-func (s *SubService) genTemplatedRemark(inbound *model.Inbound, client model.Client, hostRemark string) string {
+// the host endpoint's remark (empty for a plain inbound); it backs the {{HOST}}
+// token only and never substitutes the inbound remark as the config name.
+func (s *SubService) genTemplatedRemark(inbound *model.Inbound, client model.Client, hostRemark string, transport string) string {
 	ctx := remarkContext{
 		client:     client,
 		stats:      s.statsForClient(inbound, client),
 		inbound:    inbound,
 		hostRemark: hostRemark,
+		transport:  transport,
+		security:   inboundSecurity(inbound),
 	}
-	tmpl := s.effectiveTemplate(client.Email)
-	// Fall back to the config name when the template is empty or expands to
-	// nothing (e.g. an all-unlimited template whose only segments dropped out).
+	var tmpl string
+	if s.subscriptionBody {
+		tmpl = s.effectiveTemplate(client.Email)
+	} else {
+		tmpl = filterRemarkTemplate(translateUISingleBrackets(s.remarkTemplate), displayRemoveTokens)
+	}
 	if out := expandRemarkVars(tmpl, ctx); strings.TrimSpace(out) != "" {
 		return out
 	}
 	return ctx.configName()
 }
 
-// genHostRemark builds one host endpoint's remark for a specific client. The
-// config name is the host endpoint's own remark when set, otherwise the inbound's
-// remark. In the subscription body the rest of the remark template still applies;
-// displays show just the config name.
-func (s *SubService) genHostRemark(inbound *model.Inbound, client model.Client, hostRemark string) string {
-	if !s.subscriptionBody {
-		return remarkContext{inbound: inbound, hostRemark: hostRemark}.configName()
+// genHostRemark builds one host endpoint's remark for a specific client. With a
+// remark template set it is template-driven (body shows the full template on the
+// first link and the name-only part thereafter; displays render the name-only
+// part). With no template it falls back to inbound, host and email joined by "-".
+func (s *SubService) genHostRemark(inbound *model.Inbound, client model.Client, hostRemark string, transport string) string {
+	if s.remarkTemplate != "" {
+		return s.genTemplatedRemark(inbound, client, hostRemark, transport)
 	}
-	return s.genTemplatedRemark(inbound, client, hostRemark)
+	return fallbackRemark(inbound.Remark, hostRemark, client.Email)
 }

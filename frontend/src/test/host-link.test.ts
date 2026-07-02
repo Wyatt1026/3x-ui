@@ -13,9 +13,11 @@ describe('hostToExternalProxyEntry', () => {
     alpn: ['h2'] as ('h2' | 'h3' | 'http/1.1')[],
     fingerprint: 'chrome' as const,
     pinnedPeerCertSha256: ['AAAA'],
+    verifyPeerCertByName: 'verify.example.com',
     echConfigList: 'ECH',
     overrideSniFromAddress: false,
     keepSniBlank: false,
+    vlessRoute: '',
   };
 
   it('maps the overlapping fields onto an external-proxy entry', () => {
@@ -28,6 +30,7 @@ describe('hostToExternalProxyEntry', () => {
     expect(ep.alpn).toEqual(['h2']);
     expect(ep.fingerprint).toBe('chrome');
     expect(ep.pinnedPeerCertSha256).toEqual(['AAAA']);
+    expect(ep.verifyPeerCertByName).toBe('verify.example.com');
     expect(ep.echConfigList).toBe('ECH');
   });
 
@@ -50,5 +53,10 @@ describe('hostToExternalProxyEntry', () => {
   it('falls back to port 443 when the host port is 0 (inherit)', () => {
     const ep = hostToExternalProxyEntry({ ...base, port: 0 });
     expect(ep.port).toBe(443);
+  });
+
+  it('carries a single vlessRoute value through to the entry', () => {
+    expect(hostToExternalProxyEntry({ ...base, vlessRoute: '443' }).vlessRoute).toBe('443');
+    expect(hostToExternalProxyEntry({ ...base, vlessRoute: '' }).vlessRoute).toBeUndefined();
   });
 });

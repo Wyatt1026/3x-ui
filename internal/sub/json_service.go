@@ -29,7 +29,7 @@ type SubJsonService struct {
 func NewSubJsonService(mux string, rules string, finalMask string, subService *SubService) *SubJsonService {
 	var configJson map[string]any
 	var defaultOutbounds []json_util.RawMessage
-	json.Unmarshal([]byte(defaultJson), &configJson)
+	_ = json.Unmarshal([]byte(defaultJson), &configJson)
 	if outboundSlices, ok := configJson["outbounds"].([]any); ok {
 		for _, defaultOutbound := range outboundSlices {
 			jsonBytes, _ := json.Marshal(defaultOutbound)
@@ -41,7 +41,7 @@ func NewSubJsonService(mux string, rules string, finalMask string, subService *S
 		var newRules []any
 		routing, _ := configJson["routing"].(map[string]any)
 		defaultRules, _ := routing["rules"].([]any)
-		json.Unmarshal([]byte(rules), &newRules)
+		_ = json.Unmarshal([]byte(rules), &newRules)
 		defaultRules = append(newRules, defaultRules...)
 		routing["rules"] = defaultRules
 		configJson["routing"] = routing
@@ -174,12 +174,13 @@ func (s *SubJsonService) getConfig(subReq *SubService, inbound *model.Inbound, c
 	}
 
 	delete(stream, "externalProxy")
+	network, _ := stream["network"].(string)
 
 	for _, ep := range externalProxies {
 		extPrxy := ep.(map[string]any)
 		// Expand the host's {{VAR}} remark template for this client (no-op for
 		// the synthetic/legacy entry) before it's used as the config remark.
-		subReq.renderHostRemark(inbound, client, extPrxy)
+		subReq.renderHostRemark(inbound, client, extPrxy, network)
 		inbound.Listen = extPrxy["dest"].(string)
 		inbound.Port = int(extPrxy["port"].(float64))
 		newStream := cloneStreamForExternalProxy(stream)
@@ -209,7 +210,9 @@ func (s *SubJsonService) getConfig(subReq *SubService, inbound *model.Inbound, c
 		case "vmess":
 			newOutbounds = append(newOutbounds, s.genVnext(inbound, streamSettings, client, jsonMux(mux, hostMux)))
 		case "vless":
-			newOutbounds = append(newOutbounds, s.genVless(inbound, streamSettings, client, jsonMux(mux, hostMux)))
+			vc := client
+			vc.ID = applyVlessRoute(client.ID, hostVlessRoute(extPrxy))
+			newOutbounds = append(newOutbounds, s.genVless(inbound, streamSettings, vc, jsonMux(mux, hostMux)))
 		case "trojan", "shadowsocks":
 			newOutbounds = append(newOutbounds, s.genServer(inbound, streamSettings, client, jsonMux(mux, hostMux)))
 		case "hysteria":
@@ -220,8 +223,9 @@ func (s *SubJsonService) getConfig(subReq *SubService, inbound *model.Inbound, c
 		newConfigJson := make(map[string]any)
 		maps.Copy(newConfigJson, s.configJson)
 
+		transport, _ := newStream["network"].(string)
 		newConfigJson["outbounds"] = newOutbounds
-		newConfigJson["remarks"] = subReq.endpointRemark(inbound, client.Email, extPrxy)
+		newConfigJson["remarks"] = subReq.endpointRemark(inbound, client.Email, extPrxy, transport)
 
 		newConfig, _ := json.MarshalIndent(newConfigJson, "", "  ")
 		newJsonArray = append(newJsonArray, newConfig)
@@ -232,7 +236,7 @@ func (s *SubJsonService) getConfig(subReq *SubService, inbound *model.Inbound, c
 
 func (s *SubJsonService) streamData(stream string) map[string]any {
 	var streamSettings map[string]any
-	json.Unmarshal([]byte(stream), &streamSettings)
+	_ = json.Unmarshal([]byte(stream), &streamSettings)
 	security, _ := streamSettings["security"].(string)
 	switch security {
 	case "tls":
@@ -307,6 +311,9 @@ func (s *SubJsonService) tlsData(tData map[string]any) map[string]any {
 	if ech, ok := tlsClientSettings["echConfigList"].(string); ok && ech != "" {
 		tlsData["echConfigList"] = ech
 	}
+	if vcn, ok := verifyPeerCertByNameValue(tlsClientSettings); ok {
+		tlsData["verifyPeerCertByName"] = vcn
+	}
 	// xray-core now parses pinnedPeerCertSha256 as a comma-separated string, not
 	// an array; emit the joined form so v2ray clients can import the config (#5401).
 	if pins, ok := pinnedSha256List(tlsClientSettings); ok {
@@ -324,8 +331,10 @@ func (s *SubJsonService) realityData(rData map[string]any) map[string]any {
 	rltyData["fingerprint"] = rltyClientSettings["fingerprint"]
 	rltyData["mldsa65Verify"] = rltyClientSettings["mldsa65Verify"]
 
-	// Set random data
 	rltyData["spiderX"] = "/" + random.Seq(15)
+	if spx, ok := rltyClientSettings["spiderX"].(string); ok && spx != "" {
+		rltyData["spiderX"] = spx
+	}
 	shortIds, ok := rData["shortIds"].([]any)
 	if ok && len(shortIds) > 0 {
 		rltyData["shortId"] = shortIds[random.Num(len(shortIds))].(string)
@@ -387,7 +396,7 @@ func (s *SubJsonService) genVless(inbound *model.Inbound, streamSettings json_ut
 
 	// Add encryption for VLESS outbound from inbound settings
 	var inboundSettings map[string]any
-	json.Unmarshal([]byte(inbound.Settings), &inboundSettings)
+	_ = json.Unmarshal([]byte(inbound.Settings), &inboundSettings)
 	encryption, _ := inboundSettings["encryption"].(string)
 
 	settings := map[string]any{
@@ -418,7 +427,7 @@ func (s *SubJsonService) genServer(inbound *model.Inbound, streamSettings json_u
 
 	if inbound.Protocol == model.Shadowsocks {
 		var inboundSettings map[string]any
-		json.Unmarshal([]byte(inbound.Settings), &inboundSettings)
+		_ = json.Unmarshal([]byte(inbound.Settings), &inboundSettings)
 		method, _ := inboundSettings["method"].(string)
 		serverData[0].Method = method
 
@@ -469,7 +478,7 @@ func (s *SubJsonService) genHy(inbound *model.Inbound, newStream map[string]any,
 	}
 
 	var settings, stream map[string]any
-	json.Unmarshal([]byte(inbound.Settings), &settings)
+	_ = json.Unmarshal([]byte(inbound.Settings), &settings)
 	version, _ := settings["version"].(float64)
 	outbound.Settings = map[string]any{
 		"version": int(version),
@@ -477,7 +486,7 @@ func (s *SubJsonService) genHy(inbound *model.Inbound, newStream map[string]any,
 		"port":    inbound.Port,
 	}
 
-	json.Unmarshal([]byte(inbound.StreamSettings), &stream)
+	_ = json.Unmarshal([]byte(inbound.StreamSettings), &stream)
 	hyStream := stream["hysteriaSettings"].(map[string]any)
 	outHyStream := map[string]any{
 		"version": int(version),

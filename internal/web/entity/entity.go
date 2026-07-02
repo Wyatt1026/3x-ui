@@ -39,27 +39,29 @@ type AllSetting struct {
 	Datepicker     string `json:"datepicker" form:"datepicker"`                            // Date picker format
 
 	// Telegram bot settings
-	TgBotEnable     bool   `json:"tgBotEnable" form:"tgBotEnable"`              // Enable Telegram bot notifications
-	TgBotToken      string `json:"tgBotToken" form:"tgBotToken"`                // Telegram bot token
-	TgBotProxy      string `json:"tgBotProxy" form:"tgBotProxy"`                // Proxy URL for Telegram bot
-	TgBotAPIServer  string `json:"tgBotAPIServer" form:"tgBotAPIServer"`        // Custom API server for Telegram bot
-	TgBotChatId     string `json:"tgBotChatId" form:"tgBotChatId"`              // Telegram chat ID for notifications
-	TgRunTime       string `json:"tgRunTime" form:"tgRunTime"`                  // Cron schedule for Telegram notifications
-	TgBotBackup     bool   `json:"tgBotBackup" form:"tgBotBackup"`              // Enable database backup via Telegram
-	TgCpu           int    `json:"tgCpu" form:"tgCpu" validate:"gte=0,lte=100"` // CPU usage threshold for alerts (percent)
-	TgLang          string `json:"tgLang" form:"tgLang"`                        // Telegram bot language
-	TgEnabledEvents string `json:"tgEnabledEvents" form:"tgEnabledEvents"`      // Comma-separated event types to send via Telegram
+	TgBotEnable     bool   `json:"tgBotEnable" form:"tgBotEnable"`                    // Enable Telegram bot notifications
+	TgBotToken      string `json:"tgBotToken" form:"tgBotToken"`                      // Telegram bot token
+	TgBotProxy      string `json:"tgBotProxy" form:"tgBotProxy"`                      // Proxy URL for Telegram bot
+	TgBotAPIServer  string `json:"tgBotAPIServer" form:"tgBotAPIServer"`              // Custom API server for Telegram bot
+	TgBotChatId     string `json:"tgBotChatId" form:"tgBotChatId"`                    // Telegram chat ID for notifications
+	TgRunTime       string `json:"tgRunTime" form:"tgRunTime"`                        // Cron schedule for Telegram notifications
+	TgBotBackup     bool   `json:"tgBotBackup" form:"tgBotBackup"`                    // Enable database backup via Telegram
+	TgCpu           int    `json:"tgCpu" form:"tgCpu" validate:"gte=0,lte=100"`       // CPU usage threshold for alerts (percent)
+	TgMemory        int    `json:"tgMemory" form:"tgMemory" validate:"gte=0,lte=100"` // Memory usage threshold for alerts (percent)
+	TgLang          string `json:"tgLang" form:"tgLang"`                              // Telegram bot language
+	TgEnabledEvents string `json:"tgEnabledEvents" form:"tgEnabledEvents"`            // Comma-separated event types to send via Telegram
 
 	// Email (SMTP) notification settings
-	SmtpEnable         bool   `json:"smtpEnable" form:"smtpEnable"`                        // Enable email notifications
-	SmtpHost           string `json:"smtpHost" form:"smtpHost"`                            // SMTP server host
-	SmtpPort           int    `json:"smtpPort" form:"smtpPort" validate:"gte=1,lte=65535"` // SMTP server port
-	SmtpUsername       string `json:"smtpUsername" form:"smtpUsername"`                    // SMTP username
-	SmtpPassword       string `json:"smtpPassword" form:"smtpPassword"`                    // SMTP password
-	SmtpTo             string `json:"smtpTo" form:"smtpTo"`                                // Comma-separated recipient emails
-	SmtpEncryptionType string `json:"smtpEncryptionType" form:"smtpEncryptionType"`        // SMTP encryption: none, starttls, tls
-	SmtpEnabledEvents  string `json:"smtpEnabledEvents" form:"smtpEnabledEvents"`          // Comma-separated event types to send via email
-	SmtpCpu            int    `json:"smtpCpu" form:"smtpCpu" validate:"gte=0,lte=100"`     // CPU threshold for email notifications
+	SmtpEnable         bool   `json:"smtpEnable" form:"smtpEnable"`                          // Enable email notifications
+	SmtpHost           string `json:"smtpHost" form:"smtpHost"`                              // SMTP server host
+	SmtpPort           int    `json:"smtpPort" form:"smtpPort" validate:"gte=1,lte=65535"`   // SMTP server port
+	SmtpUsername       string `json:"smtpUsername" form:"smtpUsername"`                      // SMTP username
+	SmtpPassword       string `json:"smtpPassword" form:"smtpPassword"`                      // SMTP password
+	SmtpTo             string `json:"smtpTo" form:"smtpTo"`                                  // Comma-separated recipient emails
+	SmtpEncryptionType string `json:"smtpEncryptionType" form:"smtpEncryptionType"`          // SMTP encryption: none, starttls, tls
+	SmtpEnabledEvents  string `json:"smtpEnabledEvents" form:"smtpEnabledEvents"`            // Comma-separated event types to send via email
+	SmtpCpu            int    `json:"smtpCpu" form:"smtpCpu" validate:"gte=0,lte=100"`       // CPU threshold for email notifications
+	SmtpMemory         int    `json:"smtpMemory" form:"smtpMemory" validate:"gte=0,lte=100"` // Memory threshold for email notifications
 
 	// Security settings
 	TimeLocation    string `json:"timeLocation" form:"timeLocation"`       // Time zone location
@@ -75,6 +77,8 @@ type AllSetting struct {
 	SubAnnounce                 string `json:"subAnnounce" form:"subAnnounce"`                                 // Subscription announce
 	SubEnableRouting            bool   `json:"subEnableRouting" form:"subEnableRouting"`                       // Enable routing for subscription
 	SubRoutingRules             string `json:"subRoutingRules" form:"subRoutingRules"`                         // Subscription global routing rules (Only for Happ)
+	SubIncyEnableRouting        bool   `json:"subIncyEnableRouting" form:"subIncyEnableRouting"`               // Enable routing injection for the Incy client
+	SubIncyRoutingRules         string `json:"subIncyRoutingRules" form:"subIncyRoutingRules"`                 // Incy routing deep-link injected into the subscription body (Only for Incy)
 	SubListen                   string `json:"subListen" form:"subListen"`                                     // Subscription server listen IP
 	SubPort                     int    `json:"subPort" form:"subPort" validate:"gte=1,lte=65535"`              // Subscription server port
 	SubPath                     string `json:"subPath" form:"subPath"`                                         // Base path for subscription URLs
@@ -98,19 +102,21 @@ type AllSetting struct {
 	SubJsonRules                string `json:"subJsonRules" form:"subJsonRules"`
 	SubJsonFinalMask            string `json:"subJsonFinalMask" form:"subJsonFinalMask"` // JSON subscription global finalmask (tcp/udp masks + quicParams)
 	SubThemeDir                 string `json:"subThemeDir" form:"subThemeDir"`           // Absolute path to a folder containing a custom subscription page template
+	SubHideSettings             bool   `json:"subHideSettings" form:"subHideSettings"`   // Hide server settings in happ subscription (Only for Happ)
 
 	// LDAP settings
-	LdapEnable     bool   `json:"ldapEnable" form:"ldapEnable"`
-	LdapHost       string `json:"ldapHost" form:"ldapHost"`
-	LdapPort       int    `json:"ldapPort" form:"ldapPort" validate:"gte=0,lte=65535"`
-	LdapUseTLS     bool   `json:"ldapUseTLS" form:"ldapUseTLS"`
-	LdapBindDN     string `json:"ldapBindDN" form:"ldapBindDN"`
-	LdapPassword   string `json:"ldapPassword" form:"ldapPassword"`
-	LdapBaseDN     string `json:"ldapBaseDN" form:"ldapBaseDN"`
-	LdapUserFilter string `json:"ldapUserFilter" form:"ldapUserFilter"`
-	LdapUserAttr   string `json:"ldapUserAttr" form:"ldapUserAttr"` // e.g., mail or uid
-	LdapVlessField string `json:"ldapVlessField" form:"ldapVlessField"`
-	LdapSyncCron   string `json:"ldapSyncCron" form:"ldapSyncCron"`
+	LdapEnable             bool   `json:"ldapEnable" form:"ldapEnable"`
+	LdapHost               string `json:"ldapHost" form:"ldapHost"`
+	LdapPort               int    `json:"ldapPort" form:"ldapPort" validate:"gte=0,lte=65535"`
+	LdapUseTLS             bool   `json:"ldapUseTLS" form:"ldapUseTLS"`
+	LdapInsecureSkipVerify bool   `json:"ldapInsecureSkipVerify" form:"ldapInsecureSkipVerify"`
+	LdapBindDN             string `json:"ldapBindDN" form:"ldapBindDN"`
+	LdapPassword           string `json:"ldapPassword" form:"ldapPassword"`
+	LdapBaseDN             string `json:"ldapBaseDN" form:"ldapBaseDN"`
+	LdapUserFilter         string `json:"ldapUserFilter" form:"ldapUserFilter"`
+	LdapUserAttr           string `json:"ldapUserAttr" form:"ldapUserAttr"` // e.g., mail or uid
+	LdapVlessField         string `json:"ldapVlessField" form:"ldapVlessField"`
+	LdapSyncCron           string `json:"ldapSyncCron" form:"ldapSyncCron"`
 	// Generic flag configuration
 	LdapFlagField         string `json:"ldapFlagField" form:"ldapFlagField"`
 	LdapTruthyValues      string `json:"ldapTruthyValues" form:"ldapTruthyValues"`

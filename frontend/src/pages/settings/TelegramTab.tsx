@@ -5,7 +5,8 @@ import { BellOutlined, SendOutlined, SettingOutlined } from '@ant-design/icons';
 import { LanguageManager } from '@/utils';
 import { HttpUtil } from '@/utils';
 import type { AllSetting } from '@/models/setting';
-import { SettingListItem, EventBusCheckboxes } from '@/components/ui';
+import { SettingListItem } from '@/components/ui';
+import { TelegramNotifications } from '@/components/ui/notifications/TelegramNotifications';
 import { useMediaQuery } from '@/hooks/useMediaQuery';
 import { catTabLabel } from './catTabLabel';
 
@@ -114,6 +115,7 @@ function NotifyTimeField({ value, onChange }: { value: string; onChange: (v: str
         value={state.mode}
         options={modeOptions}
         onChange={onModeChange}
+        aria-label={t('pages.settings.telegramNotifyTime')}
       />
       {state.mode === 'every' && (
         <Space.Compact style={{ width: '100%' }}>
@@ -122,12 +124,14 @@ function NotifyTimeField({ value, onChange }: { value: string; onChange: (v: str
             style={{ width: '50%' }}
             value={state.num}
             onChange={(v) => update({ num: Math.max(1, Number(v) || 1) })}
+            aria-label={t('pages.settings.notifyTime.interval')}
           />
           <Select<Unit>
             style={{ width: '50%' }}
             value={state.unit}
             options={unitOptions}
             onChange={(unit) => update({ unit })}
+            aria-label={t('pages.settings.notifyTime.unit')}
           />
         </Space.Compact>
       )}
@@ -136,6 +140,7 @@ function NotifyTimeField({ value, onChange }: { value: string; onChange: (v: str
           value={state.custom}
           placeholder="0 30 8 * * *"
           onChange={(e) => update({ custom: e.target.value })}
+          aria-label={t('pages.settings.notifyTime.custom')}
         />
       )}
     </Space>
@@ -245,12 +250,7 @@ export default function TelegramTab({ allSetting, updateSetting }: TelegramTabPr
             </SettingListItem>
 
             <SettingListItem paddings="small" title={t('pages.settings.tgEventBusNotify')} description={t('pages.settings.tgEventBusNotifyDesc')}>
-              <EventBusCheckboxes
-                value={allSetting.tgEnabledEvents}
-                onChange={(v) => updateSetting({ tgEnabledEvents: v })}
-                extra={{ 'cpu.high': { key: 'tgCpu', value: allSetting.tgCpu } }}
-                onExtraChange={(key, v) => updateSetting({ [key]: Number(v) || 0 })}
-              />
+              <TelegramNotifications allSetting={allSetting} updateSetting={updateSetting} />
             </SettingListItem>
           </>
         ),

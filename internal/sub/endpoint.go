@@ -77,7 +77,7 @@ func (s *SubService) buildEndpointLinks(
 	eps []ShareEndpoint,
 	params map[string]string,
 	baseSecurity string,
-	makeLink func(dest string, port int) string,
+	makeLink func(e ShareEndpoint) string,
 	makeRemark func(e ShareEndpoint) string,
 ) string {
 	links := make([]string, 0, len(eps))
@@ -92,7 +92,7 @@ func (s *SubService) buildEndpointLinks(
 		applyEndpointHostPath(e, nextParams)
 		applyEndpointAllowInsecure(e, nextParams, securityToApply)
 		links = append(links, buildLinkWithParamsAndSecurity(
-			makeLink(e.Address, e.Port),
+			makeLink(e),
 			nextParams,
 			makeRemark(e),
 			securityToApply,
@@ -103,7 +103,7 @@ func (s *SubService) buildEndpointLinks(
 }
 
 // buildEndpointVmessLinks renders one VMess base64-JSON link per endpoint.
-func (s *SubService) buildEndpointVmessLinks(eps []ShareEndpoint, baseObj map[string]any, inbound *model.Inbound, email string) string {
+func (s *SubService) buildEndpointVmessLinks(eps []ShareEndpoint, baseObj map[string]any, inbound *model.Inbound, email string, transport string) string {
 	var links strings.Builder
 	for index, e := range eps {
 		securityToApply, _ := baseObj["tls"].(string)
@@ -111,7 +111,7 @@ func (s *SubService) buildEndpointVmessLinks(eps []ShareEndpoint, baseObj map[st
 			securityToApply = e.ForceTls
 		}
 		newObj := cloneVmessShareObj(baseObj, e.ForceTls)
-		newObj["ps"] = s.endpointRemark(inbound, email, e.ep)
+		newObj["ps"] = s.endpointRemark(inbound, email, e.ep, transport)
 		newObj["add"] = e.Address
 		newObj["port"] = e.Port
 		if e.ForceTls != "same" {

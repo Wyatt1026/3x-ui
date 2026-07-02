@@ -170,6 +170,21 @@ func (s *Server) initRouter() (*gin.Engine, error) {
 		SubRoutingRules = ""
 	}
 
+	SubHideSettings, err := s.settingService.GetSubHideSettings()
+	if err != nil {
+		SubHideSettings = false
+	}
+
+	SubIncyEnableRouting, err := s.settingService.GetSubIncyEnableRouting()
+	if err != nil {
+		SubIncyEnableRouting = false
+	}
+
+	SubIncyRoutingRules, err := s.settingService.GetSubIncyRoutingRules()
+	if err != nil {
+		SubIncyRoutingRules = ""
+	}
+
 	// set per-request localizer from headers/cookies
 	engine.Use(locale.LocalizerMiddleware())
 
@@ -227,7 +242,8 @@ func (s *Server) initRouter() (*gin.Engine, error) {
 	s.sub = NewSUBController(
 		g, LinksPath, JsonPath, ClashPath, subJsonEnable, subClashEnable, Encrypt, RemarkTemplate, SubUpdates,
 		SubJsonMux, SubJsonRules, SubJsonFinalMask, SubClashEnableRouting, SubClashRules, SubTitle, SubSupportUrl,
-		SubProfileUrl, SubAnnounce, SubEnableRouting, SubRoutingRules)
+		SubProfileUrl, SubAnnounce, SubEnableRouting, SubRoutingRules, SubHideSettings,
+		SubIncyEnableRouting, SubIncyRoutingRules)
 
 	return engine, nil
 }
@@ -237,7 +253,7 @@ func (s *Server) Start() (err error) {
 	// This is an anonymous function, no function name
 	defer func() {
 		if err != nil {
-			s.Stop()
+			_ = s.Stop()
 		}
 	}()
 
@@ -272,7 +288,7 @@ func (s *Server) Start() (err error) {
 	}
 
 	listenAddr := net.JoinHostPort(listen, strconv.Itoa(port))
-	listener, err := net.Listen("tcp", listenAddr)
+	listener, err := (&net.ListenConfig{}).Listen(context.Background(), "tcp", listenAddr)
 	if err != nil {
 		return err
 	}
@@ -307,7 +323,7 @@ func (s *Server) Start() (err error) {
 	}
 
 	go func() {
-		s.httpServer.Serve(listener)
+		_ = s.httpServer.Serve(listener)
 	}()
 
 	return nil

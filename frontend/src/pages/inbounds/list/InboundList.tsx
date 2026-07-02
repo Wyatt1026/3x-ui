@@ -25,6 +25,7 @@ import {
 } from '@ant-design/icons';
 
 import { HttpUtil } from '@/utils';
+import { activateOnKey } from '@/utils/a11y';
 
 import { buildRowActionsMenu } from './RowActions';
 import { useInboundColumns } from './useInboundColumns';
@@ -133,6 +134,11 @@ export default function InboundList({
     onSwitchEnable,
   });
 
+  const tableScrollX = useMemo(
+    () => columns.reduce((sum, c) => sum + (typeof c.width === 'number' ? c.width : 0), 0),
+    [columns],
+  );
+
   const paginationFor = (rows: DBInboundRecord[]) => {
     const size = pageSize > 0 ? pageSize : rows.length || 1;
     return { pageSize: size, showSizeChanger: false, hideOnSinglePage: true };
@@ -155,11 +161,11 @@ export default function InboundList({
       hoverable
       title={(
         <Space>
-          <Button type="primary" onClick={onAddInbound} icon={<PlusOutlined />}>
+          <Button type="primary" onClick={onAddInbound} icon={<PlusOutlined />} aria-label={t('pages.inbounds.addInbound')}>
             {!isMobile && t('pages.inbounds.addInbound')}
           </Button>
           <Dropdown trigger={['click']} menu={generalActionsMenu}>
-            <Button type="primary" icon={<MenuOutlined />}>
+            <Button type="primary" icon={<MenuOutlined />} aria-label={t('pages.inbounds.generalActions')}>
               {!isMobile && t('pages.inbounds.generalActions')}
             </Button>
           </Dropdown>
@@ -170,6 +176,7 @@ export default function InboundList({
               options={nodeFilterOptions}
               popupMatchSelectWidth={false}
               style={{ minWidth: isMobile ? 90 : 140 }}
+              aria-label={t('pages.clients.filters.nodes')}
             />
           )}
           {selectedRowKeys.length > 0 && (
@@ -177,7 +184,7 @@ export default function InboundList({
               <Tag color="blue" closable onClose={() => setSelectedRowKeys([])} style={{ marginInlineEnd: 0 }}>
                 {t('pages.inbounds.selectedCount', { count: selectedRowKeys.length })}
               </Tag>
-              <Button danger icon={<DeleteOutlined />} onClick={handleBulkDelete}>
+              <Button danger icon={<DeleteOutlined />} onClick={handleBulkDelete} aria-label={t('delete')}>
                 {!isMobile && t('delete')}
               </Button>
             </>
@@ -216,9 +223,16 @@ export default function InboundList({
                     />
                     <span className="card-id">#{record.id}</span>
                     <span className="tag-name">{record.remark}</span>
-                    <div className="card-actions" onClick={(e) => e.stopPropagation()}>
+                    <div className="card-actions">
                       <Tooltip title={t('pages.inbounds.inboundInfo')}>
-                        <InfoCircleOutlined className="row-action-trigger" onClick={() => setStatsRecord(record)} />
+                        <InfoCircleOutlined
+                          className="row-action-trigger"
+                          role="button"
+                          tabIndex={0}
+                          aria-label={t('pages.inbounds.inboundInfo')}
+                          onClick={() => setStatsRecord(record)}
+                          onKeyDown={activateOnKey(() => setStatsRecord(record))}
+                        />
                       </Tooltip>
                       <Switch
                         checked={record.enable}
@@ -233,7 +247,7 @@ export default function InboundList({
                           onClick: ({ key }) => onRowAction({ key: key as RowAction, dbInbound: record }),
                         }}
                       >
-                        <MoreOutlined className="row-action-trigger" onClick={(e) => e.preventDefault()} />
+                        <Button type="text" size="small" className="row-action-trigger" icon={<MoreOutlined />} aria-label={t('more')} />
                       </Dropdown>
                     </div>
                   </div>
@@ -252,7 +266,7 @@ export default function InboundList({
               onChange: (keys: Key[]) => setSelectedRowKeys(keys as number[]),
             }}
             pagination={paginationFor(visibleInbounds)}
-            scroll={{ x: 1000 }}
+            scroll={{ x: tableScrollX }}
             style={{ marginTop: 10 }}
             size="small"
             locale={{

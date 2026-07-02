@@ -85,7 +85,8 @@ describe('inbound security forms', () => {
         saving={false}
         setCertFromPanel={noop}
         clearCertFiles={noop}
-        generateRandomPinHash={noop}
+        pinFromCert={noop}
+        pinFromRemote={noop}
         getNewEchCert={noop}
         clearEchCert={noop}
       />
@@ -97,7 +98,11 @@ describe('inbound security forms', () => {
     renderInForm(() => (
       <RealityForm
         saving={false}
-        randomizeRealityTarget={noop}
+        scanning={false}
+        scanResult={null}
+        scanRealityTarget={noop}
+        scanRealityCandidates={async () => []}
+        applyRealityScanResult={noop}
         randomizeShortIds={noop}
         genRealityKeypair={noop}
         clearRealityKeypair={noop}

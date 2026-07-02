@@ -34,12 +34,17 @@ import {
   CheckCircleOutlined,
   WarningOutlined,
   ExportOutlined,
+  ImportOutlined,
 } from '@ant-design/icons';
 
 import { HttpUtil } from '@/utils';
+import PromptModal from '@/components/feedback/PromptModal';
+import TextModal from '@/components/feedback/TextModal';
 
 import OutboundFormModal from './OutboundFormModal';
 import { propagateOutboundTagRename } from '../basics/helpers';
+import { planOutboundDeletion, applyOutboundDeletion } from '../reference-cleanup';
+import DeletionImpactList from '../DeletionImpactList';
 import type { XraySettingsValue, SetTemplate, OutboundTestState, OutboundTrafficRow } from '@/hooks/useXraySetting';
 import './OutboundsTab.css';
 
@@ -72,6 +77,7 @@ interface OutboundsTabProps {
   testingAll: boolean;
   inboundTags: string[];
   subscriptionOutbounds?: unknown[];
+  subscriptionOutboundTags?: string[];
   isMobile: boolean;
   onResetTraffic: (tag: string) => void;
   onTest: (index: number, mode: string) => void;
@@ -91,6 +97,7 @@ export default function OutboundsTab({
   testingAll,
   inboundTags: _inboundTags,
   subscriptionOutbounds,
+  subscriptionOutboundTags,
   isMobile,
   onResetTraffic,
   onTest,
@@ -136,6 +143,19 @@ export default function OutboundsTab({
   );
 
   const rows = useMemo(() => outbounds.map((o, i) => ({ ...o, key: i })), [outbounds]);
+
+  const dialerProxyTags = useMemo(() => {
+    const tags = new Set<string>();
+    (templateSettings?.outbounds || []).forEach((o, i) => {
+      if (i === editingIndex) return;
+      if (o?.protocol === 'blackhole') return;
+      if (o?.tag) tags.add(o.tag);
+    });
+    for (const tag of subscriptionOutboundTags || []) {
+      if (tag) tags.add(tag);
+    }
+    return [...tags];
+  }, [templateSettings?.outbounds, editingIndex, subscriptionOutboundTags]);
 
   const mutate = useCallback(
     (mutator: (next: XraySettingsValue) => void) => {
@@ -190,16 +210,16 @@ export default function OutboundsTab({
   }
 
   function confirmDelete(idx: number) {
+    const impact = templateSettings
+      ? planOutboundDeletion(templateSettings, idx)
+      : { rules: [], balancers: [], observatory: false, burst: false };
     modal.confirm({
       title: `${t('delete')} ${t('pages.xray.Outbounds')} #${idx + 1}?`,
+      content: <DeletionImpactList impact={impact} />,
       okText: t('delete'),
       okType: 'danger',
       cancelText: t('cancel'),
-      onOk: () => {
-        mutate((tt) => {
-          tt.outbounds?.splice(idx, 1);
-        });
-      },
+      onOk: () => mutate((tt) => applyOutboundDeletion(tt, idx)),
     });
   }
   function setFirst(idx: number) {
@@ -221,6 +241,36 @@ export default function OutboundsTab({
       if (!tt.outbounds || idx >= tt.outbounds.length - 1) return;
       [tt.outbounds[idx + 1], tt.outbounds[idx]] = [tt.outbounds[idx], tt.outbounds[idx + 1]];
     });
+  }
+
+  const [importOpen, setImportOpen] = useState(false);
+  const [exportOpen, setExportOpen] = useState(false);
+  const [exportContent, setExportContent] = useState('');
+
+  function exportOutbounds() {
+    setExportContent(JSON.stringify(outbounds, null, 2));
+    setExportOpen(true);
+  }
+
+  function importOutbounds(value: string) {
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(value);
+    } catch {
+      messageApi.error(t('pages.xray.importInvalidJson'));
+      return;
+    }
+    const obj = parsed as { outbounds?: unknown };
+    const list = Array.isArray(parsed) ? parsed : Array.isArray(obj?.outbounds) ? obj.outbounds : null;
+    if (!list) {
+      messageApi.error(t('pages.xray.importInvalidJson'));
+      return;
+    }
+    mutate((tt) => {
+      if (!Array.isArray(tt.outbounds)) tt.outbounds = [];
+      tt.outbounds.push(...(list as never[]));
+    });
+    setImportOpen(false);
   }
 
   // --- Subscription management (minimal inline UI) ---
@@ -420,6 +470,9 @@ export default function OutboundsTab({
                   items: [
                     { key: 'warp', icon: <CloudOutlined />, label: 'WARP', onClick: onShowWarp },
                     { key: 'nord', icon: <ApiOutlined />, label: 'NordVPN', onClick: onShowNord },
+                    { type: 'divider' },
+                    { key: 'import', icon: <ImportOutlined />, label: t('pages.xray.importOutbounds'), onClick: () => setImportOpen(true) },
+                    { key: 'export', icon: <ExportOutlined />, label: t('pages.xray.exportOutbounds'), disabled: outbounds.length === 0, onClick: exportOutbounds },
                   ],
                 }}
               >
@@ -445,7 +498,7 @@ export default function OutboundsTab({
                 title={t('pages.inbounds.resetAllTrafficContent')}
                 onConfirm={() => onResetTraffic('-alltags-')}
               >
-                <Button icon={<RetweetOutlined />} />
+                <Button aria-label={t('pages.inbounds.resetTraffic')} icon={<RetweetOutlined />} />
               </Popconfirm>
             </Space>
           </Col>
@@ -485,8 +538,26 @@ export default function OutboundsTab({
           open={modalOpen}
           outbound={editingOutbound}
           existingTags={existingTags}
+          dialerProxyTags={dialerProxyTags}
           onClose={() => setModalOpen(false)}
           onConfirm={onConfirm}
+        />
+        <PromptModal
+          open={importOpen}
+          onClose={() => setImportOpen(false)}
+          title={t('pages.xray.importOutbounds')}
+          okText={t('pages.xray.importOutbounds')}
+          type="textarea"
+          json
+          onConfirm={importOutbounds}
+        />
+        <TextModal
+          open={exportOpen}
+          onClose={() => setExportOpen(false)}
+          title={t('pages.xray.exportOutbounds')}
+          content={exportContent}
+          fileName="outbounds.json"
+          json
         />
 
         {/* Subscription outbounds (read-only, merged at runtime) */}
@@ -588,7 +659,7 @@ export default function OutboundsTab({
           <div>
             <div style={{ fontWeight: 600, marginBottom: 8, display: 'flex', alignItems: 'center', gap: 8 }}>
               {t('pages.xray.outboundSub.active')}
-              <Button size="small" icon={<ReloadOutlined />} onClick={loadSubs} loading={subsLoading} />
+              <Button aria-label={t('refresh')} size="small" icon={<ReloadOutlined />} onClick={loadSubs} loading={subsLoading} />
               {subs.length > 0 && (
                 <Button size="small" type="primary" icon={<ReloadOutlined />} onClick={refreshAllSubs} loading={refreshingAll}>
                   {t('pages.xray.outboundSub.refreshAll')}
@@ -611,8 +682,8 @@ export default function OutboundsTab({
                     width: 56,
                     render: (_: unknown, r: OutboundSub, index: number) => (
                       <Space size={0}>
-                        <Button type="text" size="small" icon={<ArrowUpOutlined />} disabled={index === 0 || busyId === r.id} onClick={() => moveSub(r.id, 'up')} />
-                        <Button type="text" size="small" icon={<ArrowDownOutlined />} disabled={index === subs.length - 1 || busyId === r.id} onClick={() => moveSub(r.id, 'down')} />
+                        <Button aria-label={t('pages.inbounds.form.moveUp')} type="text" size="small" icon={<ArrowUpOutlined />} disabled={index === 0 || busyId === r.id} onClick={() => moveSub(r.id, 'up')} />
+                        <Button aria-label={t('pages.inbounds.form.moveDown')} type="text" size="small" icon={<ArrowDownOutlined />} disabled={index === subs.length - 1 || busyId === r.id} onClick={() => moveSub(r.id, 'down')} />
                       </Space>
                     ),
                   },
@@ -647,10 +718,10 @@ export default function OutboundsTab({
                     key: 'actions',
                     render: (_: unknown, r: OutboundSub) => (
                       <Space>
-                        <Button size="small" icon={<EditOutlined />} onClick={() => openEditSub(r)} title={t('edit')} />
-                        <Button size="small" icon={<ReloadOutlined />} loading={refreshingId === r.id} onClick={() => refreshOne(r.id)} title={t('pages.xray.outboundSub.refreshNow')} />
+                        <Button aria-label={t('edit')} size="small" icon={<EditOutlined />} onClick={() => openEditSub(r)} title={t('edit')} />
+                        <Button aria-label={t('pages.xray.outboundSub.refreshNow')} size="small" icon={<ReloadOutlined />} loading={refreshingId === r.id} onClick={() => refreshOne(r.id)} title={t('pages.xray.outboundSub.refreshNow')} />
                         <Popconfirm title={t('pages.xray.outboundSub.deleteConfirm')} okText={t('delete')} cancelText={t('cancel')} onConfirm={() => deleteOne(r.id)}>
-                          <Button size="small" danger icon={<DeleteOutlined />} />
+                          <Button aria-label={t('delete')} size="small" danger icon={<DeleteOutlined />} />
                         </Popconfirm>
                       </Space>
                     ),

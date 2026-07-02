@@ -17,6 +17,7 @@ type Manager struct {
 
 	mu             sync.RWMutex
 	remotes        map[int]*Remote
+	overrides      map[int]Runtime // test-only: forces RuntimeFor to return a stub
 	egressResolver NodeEgressResolver
 }
 
@@ -25,6 +26,22 @@ func NewManager(localDeps LocalDeps) *Manager {
 		local:   NewLocal(localDeps),
 		remotes: make(map[int]*Remote),
 	}
+}
+
+// SetRuntimeOverride makes RuntimeFor(nodeID) return rt instead of building a
+// real Remote. Test seam for exercising node-dispatch paths without a network
+// node; pass nil rt to clear.
+func (m *Manager) SetRuntimeOverride(nodeID int, rt Runtime) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if rt == nil {
+		delete(m.overrides, nodeID)
+		return
+	}
+	if m.overrides == nil {
+		m.overrides = make(map[int]Runtime)
+	}
+	m.overrides[nodeID] = rt
 }
 
 func (m *Manager) SetNodeEgressResolver(r NodeEgressResolver) {
@@ -47,6 +64,10 @@ func (m *Manager) RuntimeFor(nodeID *int) (Runtime, error) {
 		return m.local, nil
 	}
 	m.mu.RLock()
+	if rt, ok := m.overrides[*nodeID]; ok {
+		m.mu.RUnlock()
+		return rt, nil
+	}
 	if rt, ok := m.remotes[*nodeID]; ok {
 		m.mu.RUnlock()
 		return rt, nil
@@ -78,19 +99,56 @@ func (m *Manager) RemoteFor(node *model.Node) (*Remote, error) {
 	}
 	m.mu.RLock()
 	if rt, ok := m.remotes[node.Id]; ok {
+		if sameRemoteIdentity(rt.node, node) {
+			m.mu.RUnlock()
+			return rt, nil
+		}
 		m.mu.RUnlock()
-		return rt, nil
+	} else {
+		m.mu.RUnlock()
 	}
-	m.mu.RUnlock()
 
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if rt, ok := m.remotes[node.Id]; ok {
+		if sameRemoteIdentity(rt.node, node) {
+			return rt, nil
+		}
+	} else {
+		rt := NewRemote(cloneRemoteNode(node), m.egressResolver)
+		m.remotes[node.Id] = rt
 		return rt, nil
 	}
-	rt := NewRemote(node, m.egressResolver)
+	rt := NewRemote(cloneRemoteNode(node), m.egressResolver)
 	m.remotes[node.Id] = rt
 	return rt, nil
+}
+
+func cloneRemoteNode(n *model.Node) *model.Node {
+	if n == nil {
+		return nil
+	}
+	clone := *n
+	if n.InboundTags != nil {
+		clone.InboundTags = append([]string(nil), n.InboundTags...)
+	}
+	return &clone
+}
+
+func sameRemoteIdentity(a, b *model.Node) bool {
+	if a == nil || b == nil {
+		return a == b
+	}
+	return a.Id == b.Id &&
+		a.Scheme == b.Scheme &&
+		a.Address == b.Address &&
+		a.Port == b.Port &&
+		a.BasePath == b.BasePath &&
+		a.ApiToken == b.ApiToken &&
+		a.AllowPrivateAddress == b.AllowPrivateAddress &&
+		a.TlsVerifyMode == b.TlsVerifyMode &&
+		a.PinnedCertSha256 == b.PinnedCertSha256 &&
+		a.OutboundTag == b.OutboundTag
 }
 
 func (m *Manager) InvalidateNode(nodeID int) {

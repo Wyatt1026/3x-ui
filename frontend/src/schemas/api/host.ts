@@ -46,18 +46,24 @@ export const HostFormSchema = z.object({
   overrideSniFromAddress: z.boolean().default(false),
   keepSniBlank: z.boolean().default(false),
   pinnedPeerCertSha256: z.array(z.string()).default([]),
-  verifyPeerCertByName: z.boolean().default(false),
+  // Comma-separated cert names (xray `vcn`). Legacy rows stored a boolean here;
+  // coerce any stray bool to '' so old data loads cleanly.
+  verifyPeerCertByName: z.preprocess(
+    (v) => (typeof v === 'boolean' ? '' : v),
+    z.string().default(''),
+  ),
   allowInsecure: z.boolean().default(false),
   echConfigList: z.string().default(''),
 
   muxParams: z.string().default(''),
   sockoptParams: z.string().default(''),
   finalMask: z.string().default(''),
-  // A comma-separated list of ports/ranges (e.g. "53,443,1000-2000"). Empty = none.
+  // Single value 0-65535 baked into the subscription UUID's 3rd group. Empty = none.
   vlessRoute: z
     .string()
     .trim()
-    .regex(/^(\d{1,5}(-\d{1,5})?)(\s*,\s*\d{1,5}(-\d{1,5})?)*$/, 'pages.hosts.toasts.badVlessRoute')
+    .regex(/^\d{1,5}$/, 'pages.hosts.toasts.badVlessRoute')
+    .refine((v) => Number(v) <= 65535, 'pages.hosts.toasts.badVlessRoute')
     .or(z.literal(''))
     .default(''),
 
@@ -98,7 +104,10 @@ export const HostRecordSchema = z.object({
   overrideSniFromAddress: z.boolean().optional(),
   keepSniBlank: z.boolean().optional(),
   pinnedPeerCertSha256: z.array(z.string()).nullish(),
-  verifyPeerCertByName: z.boolean().optional(),
+  verifyPeerCertByName: z.preprocess(
+    (v) => (typeof v === 'boolean' ? '' : v),
+    z.string().optional(),
+  ),
   allowInsecure: z.boolean().optional(),
   echConfigList: z.string().optional(),
   muxParams: z.unknown().optional(),

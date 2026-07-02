@@ -1426,6 +1426,32 @@ EOF
     ${xui_folder}/x-ui migrate
 }
 
+# setup_fail2ban auto-installs and configures fail2ban for the IP Limit feature
+# by invoking the freshly installed x-ui CLI. IP Limit is load-bearing on
+# fail2ban (without it the panel disables the limitIp field and zeroes existing
+# limits), so a fresh install should make it work out of the box, just like the
+# Docker image already does. Non-fatal by design: a fail2ban failure must never
+# abort the panel install.
+setup_fail2ban() {
+    if [[ -n "${XUI_ENABLE_FAIL2BAN+x}" && "${XUI_ENABLE_FAIL2BAN}" != "true" ]]; then
+        echo -e "${yellow}XUI_ENABLE_FAIL2BAN=${XUI_ENABLE_FAIL2BAN}, skipping Fail2ban auto-setup.${plain}"
+        return 0
+    fi
+
+    if [[ ! -x /usr/bin/x-ui ]]; then
+        echo -e "${yellow}x-ui CLI not found; skipping Fail2ban auto-setup.${plain}"
+        return 0
+    fi
+
+    echo -e "${green}Setting up Fail2ban for the IP Limit feature...${plain}"
+    if /usr/bin/x-ui setup-fail2ban; then
+        echo -e "${green}Fail2ban setup complete.${plain}"
+    else
+        echo -e "${yellow}Fail2ban setup did not finish; IP Limit stays disabled until you run 'x-ui' and open the IP Limit menu. Continuing.${plain}"
+    fi
+    return 0
+}
+
 install_x-ui() {
     cd ${xui_folder%/x-ui}/
 
@@ -1448,19 +1474,27 @@ install_x-ui() {
         fi
     else
         tag_version=$1
-        tag_version_numeric=${tag_version#v}
-        min_version="2.3.5"
+        # The rolling dev channel ships under a fixed, non-semver tag that is
+        # force-moved to the latest main commit on every push. Accept `dev` as a
+        # convenient alias and skip the numeric floor check for it.
+        if [[ "$tag_version" == "dev" || "$tag_version" == "dev-latest" ]]; then
+            tag_version="dev-latest"
+            echo -e "${yellow}Installing the rolling dev build (tag: dev-latest). This is a per-commit pre-release, not a stable version.${plain}"
+        else
+            tag_version_numeric=${tag_version#v}
+            min_version="2.3.5"
 
-        if [[ "$(printf '%s\n' "$min_version" "$tag_version_numeric" | sort -V | head -n1)" != "$min_version" ]]; then
-            echo -e "${red}Please use a newer version (at least v2.3.5). Exiting installation.${plain}"
-            exit 1
+            if [[ "$(printf '%s\n' "$min_version" "$tag_version_numeric" | sort -V | head -n1)" != "$min_version" ]]; then
+                echo -e "${red}Please use a newer version (at least v2.3.5). Exiting installation.${plain}"
+                exit 1
+            fi
         fi
 
         url="${xui_repo_url}/releases/download/${tag_version}/x-ui-linux-$(arch).tar.gz"
-        echo -e "Beginning to install x-ui $1"
+        echo -e "Beginning to install x-ui ${tag_version}"
         curl -4fLR --retry 5 --retry-delay 3 --connect-timeout 15 --max-time 300 -o ${xui_folder}-linux-$(arch).tar.gz ${url}
         if [[ $? -ne 0 ]]; then
-            echo -e "${red}Download x-ui $1 failed, please check if the version exists ${plain}"
+            echo -e "${red}Download x-ui ${tag_version} failed, please check if the version exists ${plain}"
             exit 1
         fi
     fi
@@ -1616,6 +1650,10 @@ install_x-ui() {
             exit 1
         fi
     fi
+
+    # IP Limit relies on fail2ban; install + configure it now so the feature
+    # works out of the box (no-op when XUI_ENABLE_FAIL2BAN=false). Never fatal.
+    setup_fail2ban
 
     echo -e "${green}x-ui ${tag_version}${plain} installation finished, it is running now..."
     echo -e ""

@@ -23,6 +23,7 @@ import {
   MessageOutlined,
   MoonFilled,
   MoonOutlined,
+  ReadOutlined,
   SafetyOutlined,
   SettingOutlined,
   SunOutlined,
@@ -33,16 +34,18 @@ import {
 } from '@ant-design/icons';
 
 import { HttpUtil } from '@/utils';
+import { formatPanelVersion } from '@/lib/panel-version';
 import { pauseAnimationsUntilLeave, useTheme } from '@/hooks/useTheme';
 import { useAllSettings } from '@/api/queries/useAllSettings';
 import './AppSidebar.css';
 
 const SIDEBAR_COLLAPSED_KEY = 'isSidebarCollapsed';
 const DONATE_URL = 'https://donate.sanaei.dev/';
+const DOCS_URL = 'https://docs.sanaei.dev/';
 const REPO_URL = 'https://github.com/MHSanaei/3x-ui';
 const LOGOUT_KEY = '__logout__';
 
-type IconName = 'dashboard' | 'inbound' | 'team' | 'groups' | 'setting' | 'tool' | 'cluster' | 'hosts' | 'logout' | 'apidocs' | 'outbound';
+type IconName = 'dashboard' | 'inbound' | 'team' | 'groups' | 'setting' | 'tool' | 'cluster' | 'hosts' | 'logout' | 'apidocs' | 'outbound' | 'routing';
 
 const iconByName: Record<IconName, ComponentType> = {
   dashboard: DashboardOutlined,
@@ -56,6 +59,7 @@ const iconByName: Record<IconName, ComponentType> = {
   logout: LogoutOutlined,
   apidocs: ApiOutlined,
   outbound: ExportOutlined,
+  routing: SwapOutlined,
 };
 
 function readCollapsed(): boolean {
@@ -81,9 +85,24 @@ function DonateButton({ ariaLabel }: { ariaLabel: string }) {
   );
 }
 
+function DocsButton({ ariaLabel }: { ariaLabel: string }) {
+  return (
+    <a
+      href={DOCS_URL}
+      target="_blank"
+      rel="noopener noreferrer"
+      className="sidebar-docs"
+      aria-label={ariaLabel}
+      title={ariaLabel}
+    >
+      <ReadOutlined />
+    </a>
+  );
+}
+
 function VersionBadge({ version, collapsed }: { version: string; collapsed?: boolean }) {
   if (!version) return null;
-  const label = `v${version}`;
+  const label = formatPanelVersion(version);
   return (
     <a
       href={REPO_URL}
@@ -142,7 +161,8 @@ export default function AppSidebar() {
     { key: '/groups', icon: 'groups', title: t('menu.groups') },
     { key: '/nodes', icon: 'cluster', title: t('menu.nodes') },
     { key: '/hosts', icon: 'hosts', title: t('menu.hosts') },
-    { key: '/xray#outbound', icon: 'outbound', title: t('pages.xray.Outbounds') },
+    { key: '/outbound', icon: 'outbound', title: t('menu.outbounds') },
+    { key: '/routing', icon: 'routing', title: t('menu.routing') },
     { key: '/settings', icon: 'setting', title: t('menu.settings') },
     { key: '/xray', icon: 'tool', title: t('menu.xray') },
     { key: '/api-docs', icon: 'apidocs', title: t('menu.apiDocs') },
@@ -168,7 +188,6 @@ export default function AppSidebar() {
 
   const xrayChildren = useMemo<NonNullable<MenuProps['items']>>(() => [
     { key: '/xray#basic', icon: <SettingOutlined />, label: t('pages.xray.basicTemplate') },
-    { key: '/xray#routing', icon: <SwapOutlined />, label: t('pages.xray.Routings') },
     { key: '/xray#balancer', icon: <ClusterOutlined />, label: t('pages.xray.Balancers') },
     { key: '/xray#dns', icon: <DatabaseOutlined />, label: 'DNS' },
     { key: '/xray#advanced', icon: <CodeOutlined />, label: t('pages.xray.advancedTemplate') },
@@ -182,9 +201,7 @@ export default function AppSidebar() {
       ? `/xray${hash || '#basic'}`
       : (pathname === '' ? '/' : pathname);
 
-  // The Outbounds top-level item lives on /xray#outbound, so don't auto-open the
-  // Xray Configs submenu for it.
-  const openSubmenu = settingsActive ? '/settings' : xrayActive && hash !== '#outbound' ? '/xray' : null;
+  const openSubmenu = settingsActive ? '/settings' : xrayActive ? '/xray' : null;
   const [openKeys, setOpenKeys] = useState<string[]>(() => (openSubmenu ? [openSubmenu] : []));
   useEffect(() => {
     if (openSubmenu) {
@@ -254,6 +271,7 @@ export default function AppSidebar() {
           </div>
           {!collapsed && (
             <div className="brand-actions">
+              <DocsButton ariaLabel={t('menu.docs') || 'Documentation'} />
               <DonateButton ariaLabel={t('menu.donate') || 'Donate'} />
               <ThemeCycleButton
                 id="theme-cycle"
@@ -306,6 +324,7 @@ export default function AppSidebar() {
             <span className="drawer-brand">3X-UI</span>
           </div>
           <div className="drawer-header-actions">
+            <DocsButton ariaLabel={t('menu.docs') || 'Documentation'} />
             <DonateButton ariaLabel={t('menu.donate') || 'Donate'} />
             <ThemeCycleButton
               id="theme-cycle-drawer"
@@ -351,7 +370,7 @@ export default function AppSidebar() {
         <button
           className="drawer-handle"
           type="button"
-          aria-label={t('menu.dashboard')}
+          aria-label={t('menu.openMenu')}
           onClick={() => setDrawerOpen(true)}
         >
           <MenuOutlined />

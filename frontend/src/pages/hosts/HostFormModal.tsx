@@ -56,7 +56,7 @@ function defaultsFor(host: HostRecord | null): FormShape {
     overrideSniFromAddress: host?.overrideSniFromAddress ?? false,
     keepSniBlank: host?.keepSniBlank ?? false,
     pinnedPeerCertSha256: host?.pinnedPeerCertSha256 ?? [],
-    verifyPeerCertByName: host?.verifyPeerCertByName ?? false,
+    verifyPeerCertByName: (host?.verifyPeerCertByName as string | undefined) ?? '',
     allowInsecure: host?.allowInsecure ?? false,
     echConfigList: host?.echConfigList ?? '',
     muxParams: asString(host?.muxParams),
@@ -224,8 +224,8 @@ export default function HostFormModal({ open, mode, host, inboundOptions, save, 
                       <Form.Item name="pinnedPeerCertSha256" label={t('pages.hosts.fields.pins')}>
                         <Select mode="tags" allowClear tokenSeparators={[',']} />
                       </Form.Item>
-                      <Form.Item name="verifyPeerCertByName" label={t('pages.hosts.fields.verifyPeerCertByName')} valuePropName="checked">
-                        <Switch />
+                      <Form.Item name="verifyPeerCertByName" label={t('pages.hosts.fields.verifyPeerCertByName')} tooltip={t('pages.inbounds.form.verifyPeerCertByNameTip')}>
+                        <Input placeholder="example.com" />
                       </Form.Item>
                       <Form.Item name="allowInsecure" label={t('pages.hosts.fields.allowInsecure')} tooltip={t('pages.hosts.hints.allowInsecure')} valuePropName="checked">
                         <Switch />
@@ -260,7 +260,7 @@ export default function HostFormModal({ open, mode, host, inboundOptions, save, 
                             <Input />
                           </Form.Item>
                           <Form.Item name="vlessRoute" label={t('pages.hosts.fields.vlessRoute')} tooltip={t('pages.hosts.hints.vlessRoute')}>
-                            <Input placeholder="53,443,1000-2000" />
+                            <Input placeholder="443" />
                           </Form.Item>
                           <Form.Item name="excludeFromSubTypes" label={t('pages.hosts.fields.excludeFromSubTypes')}>
                             <Select

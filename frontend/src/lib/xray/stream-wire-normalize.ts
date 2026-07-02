@@ -16,8 +16,10 @@ const PACKET_UP_FIELDS = [
 const STREAM_UP_SERVER_FIELDS = ['scStreamUpServerSecs'] as const;
 
 const PLACEMENT_STRING_FIELDS = [
-  'sessionPlacement',
-  'sessionKey',
+  'sessionIDPlacement',
+  'sessionIDKey',
+  'sessionIDTable',
+  'sessionIDLength',
   'seqPlacement',
   'seqKey',
   'uplinkDataPlacement',
@@ -106,6 +108,18 @@ export function validateRealityTarget(target: string): string | undefined {
   return undefined;
 }
 
+function liftLegacyXhttpSessionKeys(obj: Record<string, unknown>): void {
+  const lift = (legacy: string, renamed: string) => {
+    const v = obj[legacy];
+    if ((obj[renamed] === undefined || obj[renamed] === '') && typeof v === 'string' && v !== '') {
+      obj[renamed] = v;
+    }
+    delete obj[legacy];
+  };
+  lift('sessionPlacement', 'sessionIDPlacement');
+  lift('sessionKey', 'sessionIDKey');
+}
+
 function dropEmptyStrings(obj: Record<string, unknown>, keys: readonly string[]): void {
   for (const key of keys) {
     const v = obj[key];
@@ -129,6 +143,20 @@ function normalizeTlsForWire(raw: Record<string, unknown>): Record<string, unkno
   const out: Record<string, unknown> = { ...raw };
   if (out.fingerprint === '') delete out.fingerprint;
 
+  // Empty server-side tuning fields mean "use xray-core's default" — never emit them.
+  if (Array.isArray(out.curvePreferences) && out.curvePreferences.length === 0) {
+    delete out.curvePreferences;
+  }
+  if (out.masterKeyLog === '' || out.masterKeyLog == null) delete out.masterKeyLog;
+  if (isRecord(out.echSockopt)) {
+    const echSock = normalizeSockoptForWire(out.echSockopt);
+    if (echSock) {
+      out.echSockopt = echSock;
+    } else {
+      delete out.echSockopt;
+    }
+  }
+
   const settings = out.settings;
   if (isRecord(settings)) {
     const settingsOut: Record<string, unknown> = { ...settings };
@@ -144,6 +172,7 @@ export function normalizeXhttpForWire(
   side: StreamWireSide,
 ): Record<string, unknown> {
   const out: Record<string, unknown> = { ...raw };
+  liftLegacyXhttpSessionKeys(out);
   const mode = typeof out.mode === 'string' && out.mode !== '' ? out.mode : 'auto';
   const enableXmux = out.enableXmux === true;
   delete out.enableXmux;

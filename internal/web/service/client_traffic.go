@@ -84,7 +84,7 @@ func (s *ClientService) BulkResetTraffic(inboundSvc *InboundService, emails []st
 		if err == nil && !rec.Enable {
 			updated := rec.ToClient()
 			updated.Enable = true
-			s.Update(inboundSvc, rec.Id, *updated)
+			_, _ = s.Update(inboundSvc, rec.Id, *updated)
 		}
 	}
 
@@ -92,6 +92,9 @@ func (s *ClientService) BulkResetTraffic(inboundSvc *InboundService, emails []st
 	err := submitTrafficWrite(func() error {
 		db := database.GetDB()
 		return db.Transaction(func(tx *gorm.DB) error {
+			if err := adjustGroupBaselinesForRemovedTraffic(tx, cleanEmails); err != nil {
+				return err
+			}
 			for _, batch := range chunkStrings(cleanEmails, sqlInChunk) {
 				res := tx.Model(xray.ClientTraffic{}).
 					Where("email IN ?", batch).
@@ -101,7 +104,15 @@ func (s *ClientService) BulkResetTraffic(inboundSvc *InboundService, emails []st
 				}
 				affected += int(res.RowsAffected)
 			}
-			return clearGlobalTraffic(tx, cleanEmails...)
+			if err := clearGlobalTraffic(tx, cleanEmails...); err != nil {
+				return err
+			}
+			for _, batch := range chunkStrings(cleanEmails, sqlInChunk) {
+				if err := tx.Where("email IN ?", batch).Delete(&model.NodeClientTraffic{}).Error; err != nil {
+					return err
+				}
+			}
+			return nil
 		})
 	})
 	if err != nil {
@@ -142,6 +153,10 @@ func (s *ClientService) resetAllClientTrafficsLocked(id int) error {
 			return nil
 		}
 
+		if err := adjustGroupBaselinesForRemovedTraffic(tx, resetEmails); err != nil {
+			return err
+		}
+
 		result := tx.Model(xray.ClientTraffic{}).
 			Where("email IN ?", resetEmails).
 			Updates(map[string]any{"enable": true, "up": 0, "down": 0})
@@ -152,6 +167,12 @@ func (s *ClientService) resetAllClientTrafficsLocked(id int) error {
 
 		if err := clearGlobalTraffic(tx, resetEmails...); err != nil {
 			return err
+		}
+
+		for _, batch := range chunkStrings(resetEmails, sqlInChunk) {
+			if err := tx.Where("email IN ?", batch).Delete(&model.NodeClientTraffic{}).Error; err != nil {
+				return err
+			}
 		}
 
 		inboundWhereText := "id "

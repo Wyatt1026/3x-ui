@@ -58,8 +58,8 @@ func (j *XrayTrafficJob) Run() {
 			logger.Warning("get RestartXrayOnClientDisable failed:", settingErr)
 		}
 		if restartOnDisable {
-			if err := j.xrayService.RestartXray(true); err != nil {
-				logger.Warning("restart xray after disabling clients failed:", err)
+			if err := j.xrayService.RestartXray(false); err != nil {
+				logger.Warning("reconcile xray after disabling clients failed:", err)
 				j.xrayService.SetToNeedRestart()
 			}
 		}
@@ -210,7 +210,7 @@ func (j *XrayTrafficJob) informTrafficToExternalAPI(inboundTraffics []*xray.Traf
 	defer fasthttp.ReleaseRequest(request)
 	request.Header.SetMethod("POST")
 	request.Header.SetContentType("application/json; charset=UTF-8")
-	request.SetBody([]byte(requestBody))
+	request.SetBody(requestBody)
 	request.SetRequestURI(informURL)
 	response := fasthttp.AcquireResponse()
 	defer fasthttp.ReleaseResponse(response)

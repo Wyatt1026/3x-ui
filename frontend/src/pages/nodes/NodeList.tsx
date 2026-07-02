@@ -28,12 +28,14 @@ import {
   PlusOutlined,
   RightOutlined,
   SafetyCertificateOutlined,
+  TeamOutlined,
   ThunderboltOutlined,
 } from '@ant-design/icons';
 
 import NodeHistoryPanel from './NodeHistoryPanel';
 import type { NodeRecord } from '@/api/queries/useNodesQuery';
 import { isPanelUpdateAvailable } from '@/lib/panel-version';
+import { activateOnKey } from '@/utils/a11y';
 import './NodeList.css';
 
 interface NodeListProps {
@@ -244,18 +246,18 @@ export default function NodeList({
       ) : (
         <Space>
           <Tooltip title={t('pages.nodes.probe')}>
-            <Button type="text" size="small" style={{ fontSize: 16 }} icon={<ThunderboltOutlined />} onClick={() => onProbe(record)} />
+            <Button type="text" size="small" style={{ fontSize: 16 }} icon={<ThunderboltOutlined />} aria-label={t('pages.nodes.probe')} onClick={() => onProbe(record)} />
           </Tooltip>
           {isUpdateEligible(record) && (
             <Tooltip title={t('pages.nodes.updatePanel')}>
-              <Button type="text" size="small" style={{ fontSize: 16 }} icon={<CloudDownloadOutlined />} onClick={() => onUpdateNode(record)} />
+              <Button type="text" size="small" style={{ fontSize: 16 }} icon={<CloudDownloadOutlined />} aria-label={t('pages.nodes.updatePanel')} onClick={() => onUpdateNode(record)} />
             </Tooltip>
           )}
           <Tooltip title={t('edit')}>
-            <Button type="text" size="small" style={{ fontSize: 16 }} icon={<EditOutlined />} onClick={() => onEdit(record)} />
+            <Button type="text" size="small" style={{ fontSize: 16 }} icon={<EditOutlined />} aria-label={t('edit')} onClick={() => onEdit(record)} />
           </Tooltip>
           <Tooltip title={t('delete')}>
-            <Button type="text" size="small" danger style={{ fontSize: 16 }} icon={<DeleteOutlined />} onClick={() => onDelete(record)} />
+            <Button type="text" size="small" danger style={{ fontSize: 16 }} icon={<DeleteOutlined />} aria-label={t('delete')} onClick={() => onDelete(record)} />
           </Tooltip>
         </Space>
       ),
@@ -295,9 +297,9 @@ export default function NodeList({
           {t('pages.nodes.address')}
           <Tooltip title={t('pages.index.toggleIpVisibility')}>
             {showAddress ? (
-              <EyeOutlined className="ip-toggle-icon" onClick={() => setShowAddress(false)} />
+              <EyeOutlined className="ip-toggle-icon" role="button" tabIndex={0} aria-label={t('pages.index.toggleIpVisibility')} onClick={() => setShowAddress(false)} onKeyDown={activateOnKey(() => setShowAddress(false))} />
             ) : (
-              <EyeInvisibleOutlined className="ip-toggle-icon" onClick={() => setShowAddress(true)} />
+              <EyeInvisibleOutlined className="ip-toggle-icon" role="button" tabIndex={0} aria-label={t('pages.index.toggleIpVisibility')} onClick={() => setShowAddress(true)} onKeyDown={activateOnKey(() => setShowAddress(true))} />
             )}
           </Tooltip>
         </span>
@@ -366,7 +368,7 @@ export default function NodeList({
             <span>{record.panelVersion || '-'}</span>
             {canUpdate && (
               <Tooltip title={`${t('pages.nodes.updateAvailable')}: ${latestVersion}`}>
-                <Tag color="orange" style={{ margin: 0, cursor: 'pointer' }} onClick={() => onUpdateNode(record)}>
+                <Tag color="orange" style={{ margin: 0, cursor: 'pointer' }} role="button" tabIndex={0} onClick={() => onUpdateNode(record)} onKeyDown={activateOnKey(() => onUpdateNode(record))}>
                   {t('pages.nodes.updateAvailable')}
                 </Tag>
               </Tooltip>
@@ -384,15 +386,29 @@ export default function NodeList({
     {
       title: t('clients'),
       align: 'center',
-      width: 160,
+      width: 180,
       render: (_value, record) => (
-        <Space size={4}>
-          <Tag color="green">{record.clientCount || 0}</Tag>
-          {record.onlineCount ? (
-            <Tag color="blue">{record.onlineCount} {t('online')}</Tag>
+        <Space size={2}>
+          <Tag className="client-count-tag" style={{ margin: 0, padding: '0 2px' }}><TeamOutlined /> {record.clientCount || 0}</Tag>
+          {record.activeCount ? (
+            <Tooltip title={t('subscription.active')}>
+              <Tag color="green" className="client-count-tag" style={{ margin: 0, padding: '0 2px' }}>{record.activeCount}</Tag>
+            </Tooltip>
+          ) : null}
+          {record.disabledCount ? (
+            <Tooltip title={t('disabled')}>
+              <Tag className="client-count-tag" style={{ margin: 0, padding: '0 2px' }}>{record.disabledCount}</Tag>
+            </Tooltip>
           ) : null}
           {record.depletedCount ? (
-            <Tag color="red">{record.depletedCount} {t('depleted')}</Tag>
+            <Tooltip title={t('depleted')}>
+              <Tag color="red" className="client-count-tag" style={{ margin: 0, padding: '0 2px' }}>{record.depletedCount}</Tag>
+            </Tooltip>
+          ) : null}
+          {record.onlineCount ? (
+            <Tooltip title={t('online')}>
+              <Tag color="blue" className="client-count-tag" style={{ margin: 0, padding: '0 2px' }}>{record.onlineCount}</Tag>
+            </Tooltip>
           ) : null}
         </Space>
       ),
@@ -452,15 +468,32 @@ export default function NodeList({
                 </div>
               ) : (
                 <div key={record.id} className="node-card">
-                  <div className="card-head" onClick={() => toggleExpanded(record.id)}>
-                    <RightOutlined className={`card-expand${expandedIds.has(record.id) ? ' is-expanded' : ''}`} />
+                  {/* eslint-disable-next-line jsx-a11y/no-static-element-interactions, jsx-a11y/click-events-have-key-events -- mouse click-to-expand mirrors the keyboard-accessible chevron disclosure button */}
+                  <div
+                    className="card-head"
+                    onClick={(e) => {
+                      if (!(e.target as HTMLElement).closest('.card-actions')) toggleExpanded(record.id);
+                    }}
+                  >
+                    <RightOutlined
+                      className={`card-expand${expandedIds.has(record.id) ? ' is-expanded' : ''}`}
+                      role="button"
+                      tabIndex={0}
+                      aria-expanded={expandedIds.has(record.id)}
+                      aria-label={record.name}
+                      onKeyDown={activateOnKey(() => toggleExpanded(record.id))}
+                    />
                     <StatusDot status={record.status} xrayState={record.xrayState} />
                     <span className="node-name">{record.name}</span>
-                    <div className="card-actions" onClick={(e) => e.stopPropagation()}>
+                    <div className="card-actions">
                       <Tooltip title={t('info')}>
                         <InfoCircleOutlined
                           className="row-action-trigger"
+                          role="button"
+                          tabIndex={0}
+                          aria-label={t('info')}
                           onClick={() => setStatsNode(record)}
+                          onKeyDown={activateOnKey(() => setStatsNode(record))}
                         />
                       </Tooltip>
                       <Switch
@@ -497,7 +530,7 @@ export default function NodeList({
                           ],
                         }}
                       >
-                        <MoreOutlined className="row-action-trigger" />
+                        <Button type="text" size="small" className="row-action-trigger" icon={<MoreOutlined />} aria-label={t('more')} />
                       </Dropdown>
                     </div>
                   </div>
@@ -540,9 +573,9 @@ export default function NodeList({
                   </a>
                   <Tooltip title={t('pages.index.toggleIpVisibility')}>
                     {showAddress ? (
-                      <EyeOutlined className="ip-toggle-icon" onClick={() => setShowAddress(false)} />
+                      <EyeOutlined className="ip-toggle-icon" role="button" tabIndex={0} aria-label={t('pages.index.toggleIpVisibility')} onClick={() => setShowAddress(false)} onKeyDown={activateOnKey(() => setShowAddress(false))} />
                     ) : (
-                      <EyeInvisibleOutlined className="ip-toggle-icon" onClick={() => setShowAddress(true)} />
+                      <EyeInvisibleOutlined className="ip-toggle-icon" role="button" tabIndex={0} aria-label={t('pages.index.toggleIpVisibility')} onClick={() => setShowAddress(true)} onKeyDown={activateOnKey(() => setShowAddress(true))} />
                     )}
                   </Tooltip>
                 </div>
@@ -587,12 +620,18 @@ export default function NodeList({
                 </div>
                 <div className="stat-row">
                   <span className="stat-label">{t('clients')}</span>
-                  <Tag color="green">{statsNode.clientCount || 0}</Tag>
-                  {statsNode.onlineCount ? (
-                    <Tag color="blue">{statsNode.onlineCount} {t('online')}</Tag>
+                  <Tag><TeamOutlined /> {statsNode.clientCount || 0}</Tag>
+                  {statsNode.activeCount ? (
+                    <Tag color="green">{statsNode.activeCount} {t('subscription.active')}</Tag>
+                  ) : null}
+                  {statsNode.disabledCount ? (
+                    <Tag>{statsNode.disabledCount} {t('disabled')}</Tag>
                   ) : null}
                   {statsNode.depletedCount ? (
                     <Tag color="red">{statsNode.depletedCount} {t('depleted')}</Tag>
+                  ) : null}
+                  {statsNode.onlineCount ? (
+                    <Tag color="blue">{statsNode.onlineCount} {t('online')}</Tag>
                   ) : null}
                 </div>
                 <div className="stat-row">

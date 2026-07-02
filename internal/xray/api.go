@@ -18,6 +18,7 @@ import (
 	"github.com/mhsanaei/3x-ui/v3/internal/config"
 	"github.com/mhsanaei/3x-ui/v3/internal/logger"
 	"github.com/mhsanaei/3x-ui/v3/internal/util/common"
+	wgutil "github.com/mhsanaei/3x-ui/v3/internal/util/wireguard"
 
 	"github.com/xtls/xray-core/app/proxyman/command"
 	routerService "github.com/xtls/xray-core/app/router/command"
@@ -32,10 +33,18 @@ import (
 	"github.com/xtls/xray-core/proxy/trojan"
 	"github.com/xtls/xray-core/proxy/vless"
 	"github.com/xtls/xray-core/proxy/vmess"
+	wireguard "github.com/xtls/xray-core/proxy/wireguard"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/status"
+)
+
+// Compiled once at package load: GetTraffic runs on every traffic-stats tick,
+// so recompiling these per call is wasted work.
+var (
+	trafficRegex       = regexp.MustCompile(`(inbound|outbound)>>>([^>]+)>>>traffic>>>(downlink|uplink)`)
+	clientTrafficRegex = regexp.MustCompile(`user>>>([^>]+)>>>traffic>>>(downlink|uplink)`)
 )
 
 // XrayAPI is a gRPC client for managing Xray core configuration, inbounds, outbounds, and statistics.
@@ -116,8 +125,16 @@ func (x *XrayAPI) Close() {
 	x.isConnected = false
 }
 
+// handlerRPCTimeout bounds per-call gRPC handler operations (add/remove inbound,
+// alter user) so a hung core connection cannot block the caller indefinitely —
+// for example while the process restart lock is held.
+const handlerRPCTimeout = 10 * time.Second
+
 // AddInbound adds a new inbound configuration to the Xray core via gRPC.
 func (x *XrayAPI) AddInbound(inbound []byte) error {
+	if x.HandlerServiceClient == nil {
+		return common.NewError("xray HandlerServiceClient is not initialized")
+	}
 	client := *x.HandlerServiceClient
 
 	conf := new(conf.InboundDetourConfig)
@@ -133,15 +150,22 @@ func (x *XrayAPI) AddInbound(inbound []byte) error {
 	}
 	inboundConfig := command.AddInboundRequest{Inbound: config}
 
-	_, err = client.AddInbound(context.Background(), &inboundConfig)
+	ctx, cancel := context.WithTimeout(context.Background(), handlerRPCTimeout)
+	defer cancel()
+	_, err = client.AddInbound(ctx, &inboundConfig)
 
 	return err
 }
 
 // DelInbound removes an inbound configuration from the Xray core by tag.
 func (x *XrayAPI) DelInbound(tag string) error {
+	if x.HandlerServiceClient == nil {
+		return common.NewError("xray HandlerServiceClient is not initialized")
+	}
 	client := *x.HandlerServiceClient
-	_, err := client.RemoveInbound(context.Background(), &command.RemoveInboundRequest{
+	ctx, cancel := context.WithTimeout(context.Background(), handlerRPCTimeout)
+	defer cancel()
+	_, err := client.RemoveInbound(ctx, &command.RemoveInboundRequest{
 		Tag: tag,
 	})
 	return err
@@ -373,6 +397,15 @@ func IsExistingTagErr(err error) bool {
 	return strings.Contains(strings.ToLower(err.Error()), "existing tag")
 }
 
+// IsUserExistsErr reports whether err is xray's response to adding a user whose
+// email is already registered on the inbound.
+func IsUserExistsErr(err error) bool {
+	if err == nil {
+		return false
+	}
+	return strings.Contains(strings.ToLower(err.Error()), "already exists")
+}
+
 // ensureXrayAssetLocation makes geoip.dat/geosite.dat resolvable when xray-core
 // config builders run inside the panel process. The xray binary resolves assets
 // relative to its own executable, but the panel binary lives one level above
@@ -386,40 +419,62 @@ func ensureXrayAssetLocation() {
 	}
 }
 
-// AddUser adds a user to an inbound in the Xray core using the specified protocol and user data.
-func (x *XrayAPI) AddUser(Protocol string, inboundTag string, user map[string]any) error {
-	userEmail, err := getRequiredUserString(user, "email")
-	if err != nil {
-		return err
+// collectStringSlice normalizes a JSON-decoded value into a slice of non-empty
+// strings, accepting both []string (typed maps) and []any (json.Unmarshal output).
+func collectStringSlice(value any) []string {
+	switch v := value.(type) {
+	case []string:
+		out := make([]string, 0, len(v))
+		for _, s := range v {
+			if s != "" {
+				out = append(out, s)
+			}
+		}
+		return out
+	case []any:
+		out := make([]string, 0, len(v))
+		for _, e := range v {
+			if s, ok := e.(string); ok && s != "" {
+				out = append(out, s)
+			}
+		}
+		return out
+	default:
+		return nil
 	}
+}
 
-	var account *serial.TypedMessage
-	switch Protocol {
+// buildUserAccount constructs the typed xray account for a user of the given
+// protocol. It returns (nil, nil) for protocols that cannot be altered live so
+// callers skip the AlterInbound call. WireGuard keys must be converted to the
+// hex form xray's wireguard proxy expects (its ParseKey uses hex.DecodeString),
+// unlike the file-config path which accepts base64 and converts internally.
+func buildUserAccount(protocolName string, user map[string]any) (*serial.TypedMessage, error) {
+	switch protocolName {
 	case "vmess":
 		userID, err := getRequiredUserString(user, "id")
 		if err != nil {
-			return err
+			return nil, err
 		}
 
-		account = serial.ToTypedMessage(&vmess.Account{
+		return serial.ToTypedMessage(&vmess.Account{
 			Id: userID,
-		})
+		}), nil
 	case "vless":
 		userID, err := getRequiredUserString(user, "id")
 		if err != nil {
-			return err
+			return nil, err
 		}
 
 		userFlow, err := getOptionalUserString(user, "flow")
 		if err != nil {
-			return err
+			return nil, err
 		}
 
 		vlessAccount := &vless.Account{
 			Id:   userID,
 			Flow: userFlow,
 		}
-		// Add testseed if provided
 		if testseedVal, ok := user["testseed"]; ok {
 			if testseedArr, ok := testseedVal.([]any); ok && len(testseedArr) >= 4 {
 				testseed := make([]uint32, len(testseedArr))
@@ -433,7 +488,6 @@ func (x *XrayAPI) AddUser(Protocol string, inboundTag string, user map[string]an
 				vlessAccount.Testseed = testseedArr
 			}
 		}
-		// Add testpre if provided (for outbound, but can be in user for compatibility)
 		if testpreVal, ok := user["testpre"]; ok {
 			if testpre, ok := testpreVal.(float64); ok && testpre > 0 {
 				vlessAccount.Testpre = uint32(testpre)
@@ -441,25 +495,25 @@ func (x *XrayAPI) AddUser(Protocol string, inboundTag string, user map[string]an
 				vlessAccount.Testpre = testpre
 			}
 		}
-		account = serial.ToTypedMessage(vlessAccount)
+		return serial.ToTypedMessage(vlessAccount), nil
 	case "trojan":
 		password, err := getRequiredUserString(user, "password")
 		if err != nil {
-			return err
+			return nil, err
 		}
 
-		account = serial.ToTypedMessage(&trojan.Account{
+		return serial.ToTypedMessage(&trojan.Account{
 			Password: password,
-		})
+		}), nil
 	case "shadowsocks":
 		cipher, err := getOptionalUserString(user, "cipher")
 		if err != nil {
-			return err
+			return nil, err
 		}
 
 		password, err := getRequiredUserString(user, "password")
 		if err != nil {
-			return err
+			return nil, err
 		}
 
 		var ssCipherType shadowsocks.CipherType
@@ -475,32 +529,86 @@ func (x *XrayAPI) AddUser(Protocol string, inboundTag string, user map[string]an
 		}
 
 		if ssCipherType != shadowsocks.CipherType_NONE {
-			account = serial.ToTypedMessage(&shadowsocks.Account{
+			return serial.ToTypedMessage(&shadowsocks.Account{
 				Password:   password,
 				CipherType: ssCipherType,
-			})
-		} else {
-			account = serial.ToTypedMessage(&shadowsocks_2022.ServerConfig{
-				Key:   password,
-				Email: userEmail,
-			})
+			}), nil
 		}
+		return serial.ToTypedMessage(&shadowsocks_2022.Account{
+			Key: password,
+		}), nil
 	case "hysteria":
 		auth, err := getRequiredUserString(user, "auth")
 		if err != nil {
-			return err
+			return nil, err
 		}
 
-		account = serial.ToTypedMessage(&hysteriaAccount.Account{
+		return serial.ToTypedMessage(&hysteriaAccount.Account{
 			Auth: auth,
-		})
+		}), nil
+	case "wireguard":
+		pubB64, err := getRequiredUserString(user, "publicKey")
+		if err != nil {
+			return nil, err
+		}
+		pubHex, err := wgutil.KeyToHex(pubB64)
+		if err != nil {
+			return nil, fmt.Errorf("wireguard publicKey: %w", err)
+		}
+
+		pskB64, err := getOptionalUserString(user, "preSharedKey")
+		if err != nil {
+			return nil, err
+		}
+		pskHex, err := wgutil.KeyToHex(pskB64)
+		if err != nil {
+			return nil, fmt.Errorf("wireguard preSharedKey: %w", err)
+		}
+
+		allowed := collectStringSlice(user["allowedIPs"])
+		if len(allowed) == 0 {
+			return nil, common.NewError("wireguard: allowedIPs required")
+		}
+
+		keepAlive, err := getOptionalUserString(user, "keepAlive")
+		if err != nil {
+			return nil, err
+		}
+
+		return serial.ToTypedMessage(&wireguard.PeerConfig{
+			PublicKey:    pubHex,
+			PreSharedKey: pskHex,
+			AllowedIps:   allowed,
+			KeepAlive:    keepAlive,
+		}), nil
 	default:
+		return nil, nil
+	}
+}
+
+// AddUser adds a user to an inbound in the Xray core using the specified protocol and user data.
+func (x *XrayAPI) AddUser(Protocol string, inboundTag string, user map[string]any) error {
+	userEmail, err := getRequiredUserString(user, "email")
+	if err != nil {
+		return err
+	}
+
+	account, err := buildUserAccount(Protocol, user)
+	if err != nil {
+		return err
+	}
+	if account == nil {
 		return nil
 	}
 
+	if x.HandlerServiceClient == nil {
+		return common.NewError("xray HandlerServiceClient is not initialized")
+	}
 	client := *x.HandlerServiceClient
 
-	_, err = client.AlterInbound(context.Background(), &command.AlterInboundRequest{
+	ctx, cancel := context.WithTimeout(context.Background(), handlerRPCTimeout)
+	defer cancel()
+	_, err = client.AlterInbound(ctx, &command.AlterInboundRequest{
 		Tag: inboundTag,
 		Operation: serial.ToTypedMessage(&command.AddUserOperation{
 			User: &protocol.User{
@@ -537,9 +645,6 @@ func (x *XrayAPI) GetTraffic() ([]*Traffic, []*ClientTraffic, error) {
 		return nil, nil, common.NewError("xray api is not initialized")
 	}
 
-	trafficRegex := regexp.MustCompile(`(inbound|outbound)>>>([^>]+)>>>traffic>>>(downlink|uplink)`)
-	clientTrafficRegex := regexp.MustCompile(`user>>>([^>]+)>>>traffic>>>(downlink|uplink)`)
-
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
 	defer cancel()
 
@@ -570,6 +675,19 @@ func (x *XrayAPI) GetTraffic() ([]*Traffic, []*ClientTraffic, error) {
 			processClientTraffic(matches, value, emailTrafficMap)
 		}
 	}
+
+	// Drop delta baselines for stats that no longer exist (deleted inbounds or
+	// clients), which otherwise linger until the next Xray restart. Only rebuild
+	// when the map has drifted past 2x the live set, so the steady-state hot path
+	// stays allocation-free.
+	if n := len(resp.GetStat()); n > 0 && len(x.StatsLastValues) > 2*n {
+		pruned := make(map[string]int64, n)
+		for _, stat := range resp.GetStat() {
+			pruned[stat.Name] = x.StatsLastValues[stat.Name]
+		}
+		x.StatsLastValues = pruned
+	}
+
 	return mapToSlice(tagTrafficMap), mapToSlice(emailTrafficMap), nil
 }
 

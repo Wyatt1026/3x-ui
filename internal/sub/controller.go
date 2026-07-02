@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+
 	"github.com/mhsanaei/3x-ui/v3/internal/logger"
 	"github.com/mhsanaei/3x-ui/v3/internal/web/service"
 )
@@ -48,13 +49,18 @@ type SUBController struct {
 	subAnnounce      string
 	subEnableRouting bool
 	subRoutingRules  string
-	subPath          string
-	subJsonPath      string
-	subClashPath     string
-	jsonEnabled      bool
-	clashEnabled     bool
-	subEncrypt       bool
-	updateInterval   string
+	subHideSettings  bool
+
+	subIncyEnableRouting bool
+	subIncyRoutingRules  string
+
+	subPath        string
+	subJsonPath    string
+	subClashPath   string
+	jsonEnabled    bool
+	clashEnabled   bool
+	subEncrypt     bool
+	updateInterval string
 
 	subService      *SubService
 	subJsonService  *SubJsonService
@@ -87,6 +93,9 @@ func NewSUBController(
 	subAnnounce string,
 	subEnableRouting bool,
 	subRoutingRules string,
+	subHideSettings bool,
+	subIncyEnableRouting bool,
+	subIncyRoutingRules string,
 ) *SUBController {
 	sub := NewSubService(remarkTemplate)
 	a := &SUBController{
@@ -96,13 +105,18 @@ func NewSUBController(
 		subAnnounce:      subAnnounce,
 		subEnableRouting: subEnableRouting,
 		subRoutingRules:  subRoutingRules,
-		subPath:          subPath,
-		subJsonPath:      jsonPath,
-		subClashPath:     clashPath,
-		jsonEnabled:      jsonEnabled,
-		clashEnabled:     clashEnabled,
-		subEncrypt:       encrypt,
-		updateInterval:   update,
+		subHideSettings:  subHideSettings,
+
+		subIncyEnableRouting: subIncyEnableRouting,
+		subIncyRoutingRules:  subIncyRoutingRules,
+
+		subPath:        subPath,
+		subJsonPath:    jsonPath,
+		subClashPath:   clashPath,
+		jsonEnabled:    jsonEnabled,
+		clashEnabled:   clashEnabled,
+		subEncrypt:     encrypt,
+		updateInterval: update,
 
 		subService:      sub,
 		subJsonService:  NewSubJsonService(jsonMux, jsonRules, jsonFinalMask, sub),
@@ -149,7 +163,8 @@ func (a *SUBController) subs(c *gin.Context) {
 	} else {
 		var result strings.Builder
 		for _, sub := range subs {
-			result.WriteString(sub + "\n")
+			result.WriteString(sub)
+			result.WriteString("\n")
 		}
 
 		// If the request expects HTML (e.g., browser) or explicitly asked (?html=1 or ?view=html), render the info page here
@@ -177,7 +192,12 @@ func (a *SUBController) subs(c *gin.Context) {
 		if profileUrl == "" {
 			profileUrl = fmt.Sprintf("%s://%s%s", scheme, hostWithPort, c.Request.RequestURI)
 		}
-		a.ApplyCommonHeaders(c, header, a.updateInterval, a.subTitle, a.subSupportUrl, profileUrl, a.subAnnounce, a.subEnableRouting, a.subRoutingRules)
+		a.ApplyCommonHeaders(c, header, a.updateInterval, a.subTitle, a.subSupportUrl, profileUrl, a.subAnnounce, a.subEnableRouting, a.subRoutingRules, a.subHideSettings)
+
+		if a.subIncyEnableRouting && a.subIncyRoutingRules != "" {
+			result.WriteString(a.subIncyRoutingRules)
+			result.WriteString("\n")
+		}
 
 		if a.subEncrypt {
 			c.String(200, base64.StdEncoding.EncodeToString([]byte(result.String())))
@@ -356,7 +376,7 @@ func (a *SUBController) subJsons(c *gin.Context) {
 		if profileUrl == "" {
 			profileUrl = fmt.Sprintf("%s://%s%s", scheme, hostWithPort, c.Request.RequestURI)
 		}
-		a.ApplyCommonHeaders(c, header, a.updateInterval, a.subTitle, a.subSupportUrl, profileUrl, a.subAnnounce, a.subEnableRouting, a.subRoutingRules)
+		a.ApplyCommonHeaders(c, header, a.updateInterval, a.subTitle, a.subSupportUrl, profileUrl, a.subAnnounce, a.subEnableRouting, a.subRoutingRules, a.subHideSettings)
 
 		c.String(200, jsonSub)
 	}
@@ -373,7 +393,7 @@ func (a *SUBController) subClashs(c *gin.Context) {
 		if profileUrl == "" {
 			profileUrl = fmt.Sprintf("%s://%s%s", scheme, hostWithPort, c.Request.RequestURI)
 		}
-		a.ApplyCommonHeaders(c, header, a.updateInterval, a.subTitle, a.subSupportUrl, profileUrl, a.subAnnounce, a.subEnableRouting, a.subRoutingRules)
+		a.ApplyCommonHeaders(c, header, a.updateInterval, a.subTitle, a.subSupportUrl, profileUrl, a.subAnnounce, a.subEnableRouting, a.subRoutingRules, a.subHideSettings)
 		if a.subTitle != "" {
 			// Clash clients commonly use Content-Disposition to choose the imported profile name.
 			c.Writer.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename*=UTF-8''%s`, url.PathEscape(a.subTitle)))
@@ -393,11 +413,12 @@ func (a *SUBController) ApplyCommonHeaders(
 	profileAnnounce string,
 	profileEnableRouting bool,
 	profileRoutingRules string,
+	profileHideSettings bool,
 ) {
 	c.Writer.Header().Set("Subscription-Userinfo", header)
 	c.Writer.Header().Set("Profile-Update-Interval", updateInterval)
 
-	//Basics
+	// Basics
 	if profileTitle != "" {
 		c.Writer.Header().Set("Profile-Title", "base64:"+base64.StdEncoding.EncodeToString([]byte(profileTitle)))
 	}
@@ -411,9 +432,12 @@ func (a *SUBController) ApplyCommonHeaders(
 		c.Writer.Header().Set("Announce", "base64:"+base64.StdEncoding.EncodeToString([]byte(profileAnnounce)))
 	}
 
-	//Advanced (Happ)
+	// Advanced (Happ)
 	c.Writer.Header().Set("Routing-Enable", strconv.FormatBool(profileEnableRouting))
 	if profileRoutingRules != "" {
 		c.Writer.Header().Set("Routing", profileRoutingRules)
+	}
+	if profileHideSettings {
+		c.Writer.Header().Set("Hide-Settings", "1")
 	}
 }

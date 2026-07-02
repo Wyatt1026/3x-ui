@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Button, Form, Input, Modal, Select, Space, Tooltip } from 'antd';
+import { Button, Form, Input, Modal, Select, Space, Switch, Tooltip } from 'antd';
 import { PlusOutlined, MinusOutlined, QuestionCircleOutlined } from '@ant-design/icons';
 import { InputAddon } from '@/components/ui';
 import { useInboundOptions } from '@/api/queries/useInboundOptions';
@@ -55,7 +55,7 @@ const initialForm = (): FormState => ({
   balancerTag: '',
 });
 
-const NETWORKS = ['', 'TCP', 'UDP', 'TCP,UDP'];
+const NETWORKS = ['', 'tcp', 'udp', 'tcp,udp'];
 const PROTOCOLS = ['http', 'tls', 'bittorrent', 'quic'];
 
 function csv(value: string): string[] {
@@ -156,21 +156,17 @@ export default function RuleFormModal({
     >
       <Form colon={false} labelCol={{ md: { span: 8 } }} wrapperCol={{ md: { span: 14 } }}>
         <Form.Item label={t('enable')}>
-          <Select
-            value={form.enabled}
-            onChange={(v) => update('enabled', v)}
+          <Switch
+            checked={form.enabled}
+            onChange={(checked) => update('enabled', checked)}
             disabled={isApiRule(rule ?? {})}
-            options={[
-              { value: true, label: t('enable') },
-              { value: false, label: t('disable') },
-            ]}
           />
         </Form.Item>
 
         <Form.Item
           label={
             <Tooltip title={t('pages.xray.rules.useComma')}>
-              {t('pages.xray.ruleForm.sourceIps')} <QuestionCircleOutlined />
+              {t('pages.xray.ruleForm.sourceIps')} <QuestionCircleOutlined aria-hidden="true" />
             </Tooltip>
           }
         >
@@ -180,7 +176,7 @@ export default function RuleFormModal({
         <Form.Item
           label={
             <Tooltip title={t('pages.xray.rules.useComma')}>
-              {t('pages.xray.ruleForm.sourcePort')} <QuestionCircleOutlined />
+              {t('pages.xray.ruleForm.sourcePort')} <QuestionCircleOutlined aria-hidden="true" />
             </Tooltip>
           }
         >
@@ -190,7 +186,7 @@ export default function RuleFormModal({
         <Form.Item
           label={
             <Tooltip title={t('pages.xray.rules.useComma')}>
-              {t('pages.xray.ruleForm.vlessRoute')} <QuestionCircleOutlined />
+              {t('pages.xray.ruleForm.vlessRoute')} <QuestionCircleOutlined aria-hidden="true" />
             </Tooltip>
           }
         >
@@ -215,7 +211,7 @@ export default function RuleFormModal({
         </Form.Item>
 
         <Form.Item label={t('pages.xray.ruleForm.attributes')}>
-          <Button size="small" icon={<PlusOutlined />} onClick={() => update('attrs', [...form.attrs, ['', '']])} />
+          <Button size="small" aria-label={t('add')} icon={<PlusOutlined />} onClick={() => update('attrs', [...form.attrs, ['', '']])} />
         </Form.Item>
         <Form.Item wrapperCol={{ span: 24 }}>
           {form.attrs.map((attr, idx) => (
@@ -223,6 +219,7 @@ export default function RuleFormModal({
               <InputAddon>{`${idx + 1}`}</InputAddon>
               <Input
                 value={attr[0]}
+                aria-label={t('pages.nodes.name')}
                 placeholder={t('pages.nodes.name')}
                 onChange={(e) => {
                   const next = form.attrs.map((a, i) => (i === idx ? ([e.target.value, a[1]] as [string, string]) : a));
@@ -231,6 +228,7 @@ export default function RuleFormModal({
               />
               <Input
                 value={attr[1]}
+                aria-label={t('pages.xray.ruleForm.value')}
                 placeholder={t('pages.xray.ruleForm.value')}
                 onChange={(e) => {
                   const next = form.attrs.map((a, i) => (i === idx ? ([a[0], e.target.value] as [string, string]) : a));
@@ -238,6 +236,7 @@ export default function RuleFormModal({
                 }}
               />
               <Button
+                aria-label={t('remove')}
                 icon={<MinusOutlined />}
                 onClick={() => update('attrs', form.attrs.filter((_, i) => i !== idx))}
               />
@@ -248,7 +247,7 @@ export default function RuleFormModal({
         <Form.Item
           label={
             <Tooltip title={t('pages.xray.rules.useComma')}>
-              IP <QuestionCircleOutlined />
+              IP <QuestionCircleOutlined aria-hidden="true" />
             </Tooltip>
           }
         >
@@ -258,7 +257,7 @@ export default function RuleFormModal({
         <Form.Item
           label={
             <Tooltip title={t('pages.xray.rules.useComma')}>
-              {t('domainName')} <QuestionCircleOutlined />
+              {t('domainName')} <QuestionCircleOutlined aria-hidden="true" />
             </Tooltip>
           }
         >
@@ -268,7 +267,7 @@ export default function RuleFormModal({
         <Form.Item
           label={
             <Tooltip title={t('pages.xray.rules.useComma')}>
-              {t('pages.xray.ruleForm.user')} <QuestionCircleOutlined />
+              {t('pages.xray.ruleForm.user')} <QuestionCircleOutlined aria-hidden="true" />
             </Tooltip>
           }
         >
@@ -278,7 +277,7 @@ export default function RuleFormModal({
         <Form.Item
           label={
             <Tooltip title={t('pages.xray.rules.useComma')}>
-              {t('pages.inbounds.port')} <QuestionCircleOutlined />
+              {t('pages.inbounds.port')} <QuestionCircleOutlined aria-hidden="true" />
             </Tooltip>
           }
         >
@@ -305,7 +304,7 @@ export default function RuleFormModal({
         <Form.Item
           label={
             <Tooltip title={t('pages.xray.ruleForm.balancerTagTooltip')}>
-              {t('pages.xray.ruleForm.balancerTag')} <QuestionCircleOutlined />
+              {t('pages.xray.ruleForm.balancerTag')} <QuestionCircleOutlined aria-hidden="true" />
             </Tooltip>
           }
         >

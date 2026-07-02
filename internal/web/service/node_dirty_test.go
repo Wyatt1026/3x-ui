@@ -1,7 +1,10 @@
 package service
 
 import (
+	"errors"
 	"testing"
+
+	"gorm.io/gorm"
 
 	"github.com/mhsanaei/3x-ui/v3/internal/database"
 	"github.com/mhsanaei/3x-ui/v3/internal/database/model"
@@ -107,6 +110,59 @@ func TestDelInboundClientByEmail_DisabledNodeClientMarksDirty(t *testing.T) {
 	}
 }
 
+// An online, enabled node that is merely config-dirty must NOT be reported as
+// pending: every node-backed edit marks the node dirty as the reconcile
+// self-heal marker, so keying the "saved, node offline, will sync" toast off
+// the dirty flag fired it on every save to a healthy online node.
+func TestIsNodePending_OnlineDirtyNodeIsNotPending(t *testing.T) {
+	setupConflictDB(t)
+	db := database.GetDB()
+
+	node := &model.Node{Name: "n1", Address: "127.0.0.1", Port: 2096, ApiToken: "tok", Enable: true, Status: "online"}
+	if err := db.Create(node).Error; err != nil {
+		t.Fatalf("create node: %v", err)
+	}
+
+	nodeSvc := NodeService{}
+	if nodeSvc.IsNodePending(node.Id) {
+		t.Fatal("a clean online node must not be pending")
+	}
+	if err := nodeSvc.MarkNodeDirty(node.Id); err != nil {
+		t.Fatalf("MarkNodeDirty: %v", err)
+	}
+	if nodeSvc.IsNodePending(node.Id) {
+		t.Fatal("an online, enabled node must not be pending just because it is config-dirty")
+	}
+}
+
+// Offline or disabled nodes are genuinely deferred and must report pending so
+// the "saved, node offline, will sync" toast still surfaces for them.
+func TestIsNodePending_OfflineOrDisabledIsPending(t *testing.T) {
+	setupConflictDB(t)
+	db := database.GetDB()
+
+	offline := &model.Node{Name: "off", Address: "127.0.0.1", Port: 2096, ApiToken: "tok", Enable: true, Status: "offline"}
+	disabled := &model.Node{Name: "dis", Address: "127.0.0.1", Port: 2097, ApiToken: "tok", Enable: false, Status: "online"}
+	for _, n := range []*model.Node{offline, disabled} {
+		if err := db.Create(n).Error; err != nil {
+			t.Fatalf("create node %s: %v", n.Name, err)
+		}
+	}
+	// Node.Enable carries gorm default:true, so Create({Enable:false}) persists
+	// TRUE — force the column off to actually exercise the disabled path.
+	if err := db.Model(&model.Node{}).Where("id = ?", disabled.Id).Update("enable", false).Error; err != nil {
+		t.Fatalf("force-disable node: %v", err)
+	}
+
+	nodeSvc := NodeService{}
+	if !nodeSvc.IsNodePending(offline.Id) {
+		t.Fatal("an offline node must be pending")
+	}
+	if !nodeSvc.IsNodePending(disabled.Id) {
+		t.Fatal("a disabled node must be pending")
+	}
+}
+
 // ClearNodeDirty must be a compare-and-swap on config_dirty_at so a concurrent
 // edit that re-dirties the node during a reconcile is not silently cleared.
 func TestNodeDirty_ClearIsCASOnDirtyAt(t *testing.T) {
@@ -142,5 +198,92 @@ func TestNodeDirty_ClearIsCASOnDirtyAt(t *testing.T) {
 	}
 	if _, _, stillDirty, _, _ := nodeSvc.NodeSyncState(node.Id); stillDirty {
 		t.Fatal("matching-token clear must clear the dirty flag")
+	}
+}
+
+func TestMarkNodeDirtyTxRollsBackWithTransaction(t *testing.T) {
+	setupConflictDB(t)
+	db := database.GetDB()
+
+	node := &model.Node{Name: "n3", Address: "127.0.0.1", Port: 2096, ApiToken: "tok", Enable: true, Status: "online"}
+	if err := db.Create(node).Error; err != nil {
+		t.Fatalf("create node: %v", err)
+	}
+
+	nodeSvc := NodeService{}
+	rollbackErr := errors.New("force rollback")
+	if err := db.Transaction(func(tx *gorm.DB) error {
+		if err := nodeSvc.MarkNodeDirtyTx(tx, node.Id); err != nil {
+			return err
+		}
+		return rollbackErr
+	}); !errors.Is(err, rollbackErr) {
+		t.Fatalf("rollback tx: got %v want %v", err, rollbackErr)
+	}
+	if _, _, dirty, _, err := nodeSvc.NodeSyncState(node.Id); err != nil {
+		t.Fatalf("NodeSyncState after rollback: %v", err)
+	} else if dirty {
+		t.Fatal("dirty flag escaped a rolled-back transaction")
+	}
+
+	if err := db.Transaction(func(tx *gorm.DB) error {
+		return nodeSvc.MarkNodeDirtyTx(tx, node.Id)
+	}); err != nil {
+		t.Fatalf("commit tx: %v", err)
+	}
+	if _, _, dirty, _, err := nodeSvc.NodeSyncState(node.Id); err != nil {
+		t.Fatalf("NodeSyncState after commit: %v", err)
+	} else if !dirty {
+		t.Fatal("dirty flag should commit with its transaction")
+	}
+}
+
+// Editing a node must mark it config-dirty so the next traffic-sync tick
+// reconciles (pushes the panel's inbounds to the remote) before pulling a
+// snapshot. Without the dirty flag, re-pointing a node to a fresh server
+// makes the orphan sweep delete every central inbound absent from the empty
+// snapshot (#5461).
+func TestNodeService_UpdateMarksNodeDirty(t *testing.T) {
+	setupConflictDB(t)
+	db := database.GetDB()
+
+	node := &model.Node{
+		Name:     "n1",
+		Address:  "10.0.0.1",
+		Port:     2096,
+		ApiToken: "tok",
+		Enable:   true,
+		Status:   "online",
+	}
+	if err := db.Create(node).Error; err != nil {
+		t.Fatalf("create node: %v", err)
+	}
+
+	edited := &model.Node{
+		Name:     node.Name,
+		Address:  "10.0.0.2",
+		Port:     2097,
+		ApiToken: node.ApiToken,
+		Enable:   true,
+	}
+	nodeSvc := NodeService{}
+	if err := nodeSvc.Update(node.Id, edited); err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+
+	_, _, dirty, _, err := nodeSvc.NodeSyncState(node.Id)
+	if err != nil {
+		t.Fatalf("NodeSyncState: %v", err)
+	}
+	if !dirty {
+		t.Fatal("Update must mark the node config-dirty so sync reconciles before snapshot sweep (#5461)")
+	}
+
+	var got model.Node
+	if err := db.First(&got, node.Id).Error; err != nil {
+		t.Fatalf("reload node: %v", err)
+	}
+	if got.Address != "10.0.0.2" || got.Port != 2097 {
+		t.Fatalf("node row not updated: address=%q port=%d", got.Address, got.Port)
 	}
 }
